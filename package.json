@@ -1,6 +1,6 @@
 {
   "name": "ai-interview-panel",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "한국어 모의면접실 — PC 실행·ChatGPT 구독 로그인·세 관점 피드백",

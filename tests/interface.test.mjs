@@ -8,14 +8,15 @@ import {roomView} from '../docs/room-state.mjs';
 import * as documents from '../docs/document-core.mjs';
 import {createVoiceInput} from '../docs/voice.mjs';
 import * as grading from '../docs/grade.mjs';
+import {actorStates} from '../docs/game-state.mjs';
 const example=JSON.parse(await readFile(new URL('../docs/example.json',import.meta.url),'utf8'));
 const html=await readFile(new URL('../docs/index.html',import.meta.url),'utf8');
 const app=(await readFile(new URL('../docs/app.js',import.meta.url),'utf8')).replace(/^import .+;\r?\n/gm,'');
 const docText='가상 지원자는 고객 설문 24건을 분류하고 기준표를 만들었습니다.';
-async function boot({local=true,voiceSupport=true,connected=true,questionsFail=false,speechStart=true,partialEvaluation=false}={}){
+async function boot({local=true,voiceSupport=true,connected=true,questionsFail=false,speechStart=true,partialEvaluation=false,deferEvaluation=false}={}){
  const dom=new JSDOM(html,{url:local?'http://127.0.0.1:4317/':'https://tracert7.github.io/ai-interview-panel/',runScripts:'outside-only'}),w=dom.window,calls=[];let microphone=null;
  class Recognition{constructor(){microphone=this;}start(){if(speechStart)this.onstart?.();}stop(){this.onend?.();}abort(){}}
- Object.assign(w,core,documents,grading,{roomView,createVoiceInput,structuredClone,TextDecoder,TextEncoder,ReadableStream,AbortController,confirm:()=>true});
+ Object.assign(w,core,documents,grading,{roomView,actorStates,createVoiceInput,structuredClone,TextDecoder,TextEncoder,ReadableStream,AbortController,confirm:()=>true});
  if(voiceSupport)w.SpeechRecognition=Recognition;
  w.HTMLElement.prototype.scrollIntoView=function(){};
  w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};
@@ -28,7 +29,7 @@ async function boot({local=true,voiceSupport=true,connected=true,questionsFail=f
   if(url==='/api/draft')return json({draft:null});
   if(url==='/api/documents/read')return json({document:{name:'자소서.txt',text:docText,notes:[]}});
   if(url==='/api/questions')return questionsFail?{ok:false,json:async()=>({error:'가상 질문 생성 실패'})}:json({questions:core.ROLES.map(r=>({role:r.id,question:r.name+'의 서류 질문',source:'자소서.txt',quote:'고객 설문 24건을 분류하고 기준표를 만들었습니다.',intent:'본인이 한 일을 확인합니다.'}))});
-  if(url==='/api/evaluate')return {ok:true,body:new ReadableStream({start(c){for(const role of core.ROLES){const event=partialEvaluation&&role.id==='lead'?{type:'error',role:role.id,error:'가상 부분 실패'}:{type:'result',result:{role:role.id,scores:[2,2,2,2,2],quote:'분류',reason:'설명 필요',improvement:'기준 설명',followup:'어떤 기준인가요?',total:10}};c.enqueue(new TextEncoder().encode(JSON.stringify(event)+'\n'));}c.enqueue(new TextEncoder().encode('{"type":"done"}\n'));c.close();}})};
+  if(url==='/api/evaluate')return {ok:true,body:new ReadableStream({start(c){if(deferEvaluation){w.testEvaluation=c;return;}for(const role of core.ROLES){const event=partialEvaluation&&role.id==='lead'?{type:'error',role:role.id,error:'가상 부분 실패'}:{type:'result',result:{role:role.id,scores:[2,2,2,2,2],quote:'분류',reason:'설명 필요',improvement:'기준 설명',followup:'어떤 기준인가요?',total:10}};c.enqueue(new TextEncoder().encode(JSON.stringify(event)+'\n'));}c.enqueue(new TextEncoder().encode('{"type":"done"}\n'));c.close();}})};
   throw Error('Unexpected UI request: '+url);
  };
  // Execute the voice module in the browser realm as well: Node timers hide illegal Window receiver bugs.
@@ -38,6 +39,29 @@ async function boot({local=true,voiceSupport=true,connected=true,questionsFail=f
  return {dom,w,calls,$:id=>w.document.getElementById(id),get microphone(){return microphone;}};
 }
 async function until(predicate){const deadline=Date.now()+3000;while(!predicate()){if(Date.now()>deadline)throw Error('UI state timed out');await new Promise(r=>setTimeout(r,5));}}
+test('UI game: question → speaking/listening → per-role streaming reactions → result CTA',async()=>{
+ const h=await boot({deferEvaluation:true}),{$,w}=h;try{
+  $('job').value='가상 인턴';$('model-select').value='test-model';$('model-select').dispatchEvent(new w.Event('change'));$('consent').checked=true;$('start-interview').click();
+  const actor=id=>w.document.querySelector('[data-actor="'+id+'"]');
+  assert.equal(actor('hr').dataset.pose,'speaking');assert.equal($('dialogue-speaker').textContent,'인사담당자');
+  actor('lead').click();assert.equal(actor('lead').dataset.pose,'speaking');assert.equal($('game-scene').dataset.speaker,'lead');
+  $('answer').value='고객 의견을 분류했습니다.';$('answer').dispatchEvent(new w.Event('input'));assert.equal(actor('lead').dataset.pose,'listening');
+  $('evaluate').click();await until(()=>w.testEvaluation);for(const id of ['hr','lead','practitioner'])assert.equal(actor(id).dataset.pose,'thinking');
+  const send=value=>w.testEvaluation.enqueue(new TextEncoder().encode(JSON.stringify(value)+'\n'));
+  send({type:'result',result:{role:'hr',scores:[2,2,2,2,2],reason:'설명',improvement:'보완',followup:'기준은?',total:10}});await until(()=>actor('hr').dataset.pose==='ready');assert.equal(actor('lead').dataset.pose,'thinking');assert.equal($('scene-result').hidden,true);
+  $('motion-toggle').click();assert.equal($('game-scene').dataset.motion,'off');assert.equal(actor('lead').dataset.pose,'thinking');
+  send({type:'error',role:'lead',error:'테스트 부분 실패'});send({type:'result',result:{role:'practitioner',scores:[2,2,2,2,2],reason:'설명',improvement:'보완',followup:'근거는?',total:10}});send({type:'done'});w.testEvaluation.close();
+  await until(()=>!$('evaluate').disabled);assert.equal(actor('lead').dataset.pose,'error');assert.equal(actor('practitioner').dataset.pose,'ready');assert.equal($('scene-result').hidden,false);assert.equal($('overall-grade-heading').textContent,'종합 등급 보류');
+  $('scene-result').click();assert.equal(w.document.activeElement,$('overall-grade-heading'));assert.equal(h.calls.filter(c=>c.url==='/api/evaluate').length,1);
+ }finally{h.dom.window.close();}
+});
+test('UI game: clearly labelled movement preview never calls AI or changes grades',async()=>{
+ const h=await boot(),{$,w}=h;try{
+  $('mode-example').click();await until(()=>!$('example-tools').hidden);$('example-feedback').click();const grade=$('overall-grade').dataset.grade;
+  $('game-preview').click();assert.equal($('room-state').textContent,'연출 미리보기');assert($('scene-caption').textContent.includes('AI 호출 없음'));assert.equal(w.document.querySelector('[data-actor=hr]').dataset.pose,'thinking');assert.equal($('overall-grade').dataset.grade,grade);assert.equal(h.calls.filter(c=>c.url==='/api/evaluate').length,0);
+  $('first-example').click();assert.notEqual($('room-state').textContent,'연출 미리보기');
+ }finally{h.dom.window.close();}
+});
 test('UI: attachment preview → role questions → voice text → real-submit shape; no automatic send',async()=>{
  const h=await boot(),{$,w}=h;
  try{

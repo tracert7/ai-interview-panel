@@ -1,5 +1,6 @@
 import {ROLES,CRITERIA,QUESTION,validateInput} from './core.mjs';
 import {roomView} from './room-state.mjs';
+import {actorStates} from './game-state.mjs';
 import {DOCUMENT_LIMITS,validateDocuments,validateQuestionInput} from './document-core.mjs';
 import {createVoiceInput} from './voice.mjs?v=0.5.1';
 import {overallGrade,GRADE_TIERS} from './grade.mjs?v=0.6.0';
@@ -10,6 +11,9 @@ const localApp=['127.0.0.1','localhost'].includes(location.hostname);
 let connection=null,leavingForAuth=false;
 let documents=[],documentQuestions=[],task='evaluation';
 let stage='prepare',liveDraft=null;
+$('mode-example').disabled=true;
+let motion=true,previewStep=null,previewTimers=[];
+function stopPreview(){previewTimers.forEach(clearTimeout);previewTimers=[];previewStep=null;}
 const status=t=>{$('feedback-status').textContent=t;$('prepare-status').textContent=t;};
 const make=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
 const overallPanel=make('section',undefined,'grade-summary');overallPanel.id='overall-grade';overallPanel.hidden=true;overallPanel.setAttribute('aria-labelledby','overall-grade-heading');$('feedback-panel').before(overallPanel);
@@ -41,6 +45,7 @@ function fields(){return {job:$('job').value,facts:$('facts').value||(documents.
 function openSettings(){const dialog=$('settings-dialog');if(!dialog.open){if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');}}
 function closeSettings(){const dialog=$('settings-dialog');if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open');}
 function setStage(next,{focus=true}={}){
+  stopPreview();
   if(next==='prepare')voice.stop({discard:true});stage=next;document.body.dataset.stage=stage;
   $('entry-panel').hidden=stage!=='prepare';$('practice-panel').hidden=stage!=='interview';$('mode-live').hidden=stage==='prepare'&&mode==='live';
   $('session-job').textContent=$('job').value.trim().split('\n')[0]||'나의 면접';
@@ -61,13 +66,39 @@ async function startInterview(){
   }else{clearResult();setStage('interview');status('첫 질문입니다. 준비되면 말하거나 직접 입력해 주세요.');}
 }
 function renderRoom(){
-  const v=roomView({speaker,question:$('question').value,results,busy,answerLoaded:!!$('answer').value.trim(),exampleMode:mode==='example'});
+  const evaluating=busy&&task==='evaluation';
+  const v=roomView({speaker,question:$('question').value,results,busy:evaluating,answerLoaded:!!$('answer').value.trim(),exampleMode:mode==='example'});
   $('dialogue-speaker').textContent=v.speaker;$('dialogue-kind').textContent=v.kind;$('dialogue-question').textContent=v.text;$('room-state').textContent=v.state;
   if(busy&&task!=='evaluation')$('room-state').textContent=task==='questions'?'서류 질문 준비 중':'서류 읽는 중';
   for(const el of document.querySelectorAll('[data-speaker]'))el.setAttribute('aria-pressed',String(el.dataset.speaker===v.role));
   if(voice.active)$('room-state').textContent=voice.phase==='connecting'?'마이크 연결 요청 중':voice.phase==='stopping'?'답변 정리 중':'답변을 듣고 있습니다';
   $('feedback-summary').textContent=Object.keys(results).length?'평가 근거와 다음에 고칠 문장을 읽어보세요.':'답변 뒤에 근거·보완점·꼬리질문을 확인합니다.';
+  renderGame(evaluating);
 }
+function renderGame(evaluating){
+  const preview=previewStep!==null;
+  const visualResults=preview?Object.fromEntries(['hr','lead','practitioner'].slice(0,previewStep).map(id=>[id,{}])):results;
+  const actors=actorStates({speaker,results:visualResults,evaluating:preview?previewStep<3:evaluating,listening:voice.active,answerLoaded:!!$('answer').value.trim()});
+  const scene=$('game-scene');scene.dataset.motion=motion?'on':'off';scene.dataset.speaker=speaker;
+  for(const el of scene.querySelectorAll('[data-actor]')){
+    const state=actors[el.dataset.actor];if(el.dataset.pose!==state.pose)el.dataset.pose=state.pose;
+    el.setAttribute('aria-label',el.dataset.name+' · '+state.label+' · 선택');
+    el.querySelector('.actor-status').textContent=state.label;
+  }
+  $('candidate-bubble').hidden=!voice.active;$('candidate-bubble').textContent=voice.phase==='connecting'?'마이크 연결 중':voice.phase==='stopping'?'답변 정리 중':'답변 중';
+  $('game-preview').hidden=mode!=='example';$('game-preview').disabled=busy||preview;
+  $('scene-caption').textContent=preview?'연출 미리보기 · AI 호출 없음 · 점수에 반영되지 않습니다.':evaluating?'검토 동작은 화면 연출입니다. 세 평가는 서로 결과를 전달하지 않습니다.':Object.keys(results).length?'캐릭터를 선택하면 그 면접관의 꼬리질문을 볼 수 있습니다.':'말풍선 아래 면접관이 질문합니다. 준비되면 말하거나 입력하세요.';
+  $('scene-result').hidden=preview||evaluating||!Object.keys(results).length;
+  $('motion-toggle').disabled=false;$('motion-toggle').setAttribute('aria-pressed',String(motion));$('motion-toggle').textContent=motion?'동작 끄기':'동작 켜기';
+  if(preview){$('dialogue-speaker').textContent='동작 미리보기';$('dialogue-kind').textContent='AI 호출 없음';$('dialogue-question').textContent=previewStep===3?'세 면접관의 완료 반응입니다. 실제 평가 결과는 바뀌지 않습니다.':'답변을 제출하면 각 면접관이 이렇게 검토합니다. 결과가 도착한 면접관부터 완료 반응으로 바뀝니다.';$('room-state').textContent='연출 미리보기';}
+}
+$('motion-toggle').addEventListener('click',()=>{motion=!motion;renderRoom();});
+$('scene-result').addEventListener('click',()=>{overallPanel.scrollIntoView({block:'start',behavior:motion?'smooth':'auto'});$('overall-grade-heading')?.setAttribute('tabindex','-1');$('overall-grade-heading')?.focus({preventScroll:true});});
+$('game-preview').addEventListener('click',()=>{
+  if(busy)return;stopPreview();previewStep=0;renderRoom();
+  for(let step=1;step<=3;step++)previewTimers.push(setTimeout(()=>{previewStep=step;renderRoom();},step*1600));
+  previewTimers.push(setTimeout(()=>{stopPreview();renderRoom();},6600));
+});
 function renderAgents(states={}){
   $('agent-grid').replaceChildren();
   for(const role of ROLES){
@@ -103,7 +134,7 @@ function addHistory(input,kind){
   for(const role of ROLES)row.append(make('td',results[role.id]?.total===undefined?'미완료':results[role.id].total+'점'));
   const grade=overallGrade(results),rank=make('td',grade.status==='complete'?grade.tier.label:'보류');if(grade.status==='complete'){rank.className='history-rank';rank.style.color=grade.tier.color;}row.append(rank,make('td',kind));$('history').append(row);
 }
-function clearResult(){results={};shownInput=null;$('feedback-panel').open=false;renderAgents();$('next-step').hidden=true;}
+function clearResult(){stopPreview();results={};shownInput=null;$('feedback-panel').open=false;renderAgents();$('next-step').hidden=true;}
 function editableChanged(){
   updateCount();
   if(shownInput){clearResult();status('입력이 달라져 이전 결과를 숨겼습니다. 이전 기록은 내보내기에 남아 있습니다.');}
@@ -135,7 +166,7 @@ async function setMode(value){
   $('room-question').readOnly=mode==='example';
   $('mode-note').textContent=localApp?'본인 PC에서 내 ChatGPT 구독으로 연습합니다. 입력·첨부·결과는 새로고침하면 사라집니다.':'이 웹 주소는 예제판입니다. 실제 면접은 GitHub에서 내려받아 PC에서 실행해 주세요.';
   $('mode-note').hidden=localApp;
-  if(mode==='live'){await refreshConnection();setStage('prepare',{focus:false});status('직무와 서류를 준비한 뒤 면접을 시작하세요.');}
+  if(mode==='live'){await refreshConnection();if(mode!==value)return;setStage('prepare',{focus:false});status('직무와 서류를 준비한 뒤 면접을 시작하세요.');}
   else{loadExample(0);setStage('interview');status('가상 지원자의 기록된 예제입니다. 새 AI 요청 없이 답변과 기록된 평가를 확인합니다.');}
   updateTools();
   renderRoom();
@@ -152,7 +183,7 @@ function showExample(index){
   results=Object.fromEntries(round.results.map(r=>[r.role,r]));shownInput=fields();renderAgents();nextStep();updateCount();addHistory(shownInput,'Work 기록');
   status((index===0?'첫 답변':'수정 답변')+'의 기록된 결과입니다. 가상 사례이며 새 AI 호출은 없습니다.');
   $('feedback-panel').open=true;
-  overallPanel.scrollIntoView({block:'start',behavior:'auto'});
+  $('game-scene').scrollIntoView({block:'start',behavior:'auto'});
 }
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=make('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function evaluate(){
@@ -175,7 +206,7 @@ async function evaluate(){
   }catch(e){status(e.name==='AbortError'?'평가를 중단했습니다. 이미 소모된 구독 사용량은 되돌릴 수 없습니다.':e.message);}
   finally{
     for(const role of ROLES)if(!results[role.id])results[role.id]={error:'완료되지 않았습니다. 자동 재요청하지 않았습니다.'};
-    renderAgents();nextStep();addHistory(input,'ChatGPT 구독');setBusy(false);controller=null;$('feedback-panel').open=true;overallPanel.scrollIntoView({block:'start',behavior:'auto'});
+    renderAgents();nextStep();addHistory(input,'ChatGPT 구독');setBusy(false);controller=null;$('feedback-panel').open=true;
   }
 }
 function requirePlan(){
@@ -307,3 +338,4 @@ $('auth-cancel').addEventListener('click',async()=>{try{await authPost('cancel')
 window.addEventListener('beforeunload',e=>{voice.stop({discard:true});if(!leavingForAuth&&(busy||documents.length||(mode!=='example'&&$('answer').value.trim()))){e.preventDefault();e.returnValue='';}});
 try{const r=await fetch('example.json');if(!r.ok)throw Error();example=await r.json();$('question').value=QUESTION;await setMode('live');if(localApp){const saved=await fetch('/api/draft',{headers:{'X-Interview-Client':'1'}});if(saved.ok){const {draft}=await saved.json();if(draft){for(const k of ['job','facts','question','answer'])if(typeof draft[k]==='string')$(k).value=draft[k];updateCount();renderRoom();}}}}
 catch{status('예제 파일을 불러오지 못했습니다. HTTP 서버나 GitHub Pages에서 열어 주세요.');renderAgents();$('first-example').disabled=true;$('second-example').disabled=true;}
+finally{$('mode-example').disabled=!example;}
