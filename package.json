@@ -1,0 +1,9 @@
+{
+  "name": "ai-interview-panel",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "한국어 3인 모의면접 연습실 — Work 키트와 로컬 API UI",
+  "engines": {"node": ">=22"},
+  "scripts": {"start": "node server.mjs", "test": "node --test tests/*.test.mjs"}
+}

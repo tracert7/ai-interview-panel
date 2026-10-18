@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+node_modules/
+coverage/
+*.log
+interview-session*.json
+private/
