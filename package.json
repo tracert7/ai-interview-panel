@@ -1,9 +1,17 @@
 {
   "name": "ai-interview-panel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "한국어 3인 모의면접 연습실 — Work 키트와 로컬 API UI",
-  "engines": {"node": ">=22"},
-  "scripts": {"start": "node server.mjs", "test": "node --test tests/*.test.mjs"}
+  "description": "한국어 모의면접실 — PC 실행·ChatGPT 구독 로그인·세 관점 피드백",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test tests/*.test.mjs"
+  },
+  "dependencies": {
+    "jose": "6.1.0"
+  }
 }

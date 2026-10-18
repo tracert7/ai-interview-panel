@@ -6,3 +6,5 @@ coverage/
 *.log
 interview-session*.json
 private/
+.private/
+*.auth.enc

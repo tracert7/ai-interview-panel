@@ -29,7 +29,7 @@ export function validateFeedback(v,answer) {
 }
 export function buildRequest(role,input,model) {
   if(!ROLES.some(r=>r.id===role.id)) throw Error('알 수 없는 역할');
-  return {model,store:false,max_output_tokens:1800,instructions:COMMON+'\n너의 역할: '+role.name+'. 집중할 관점: '+role.focus,
+  return {model,store:false,instructions:COMMON+'\n너의 역할: '+role.name+'. 집중할 관점: '+role.focus,
     input:[{role:'user',content:JSON.stringify({공고:input.job,확인된경험:input.facts,질문:input.question,답변:input.answer})}],
     text:{format:{type:'json_schema',name:'interview_feedback',strict:true,schema:SCHEMA}}};
 }

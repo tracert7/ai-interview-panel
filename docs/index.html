@@ -4,14 +4,23 @@
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="description" content="픽셀 면접실에서 인사담당자·현업·팀장의 질문과 피드백으로 답변을 연습하세요.">
 <title>AI 모의면접실 — 나의 다음 면접을 연습하는 곳</title>
-<link rel="stylesheet" href="room.css?v=0.2.0"><script type="module" src="app.js?v=0.2.0"></script>
+<link rel="stylesheet" href="room.css?v=0.3.0"><script type="module" src="app.js?v=0.3.0"></script>
 </head><body>
 <a class="skip" href="#main">본문으로</a>
 <header class="header"><a class="brand" href="./"><span class="brand-icon" aria-hidden="true">Ⅲ</span>AI 모의면접실<small>AI로 덜 일하기</small></a><a href="https://github.com/tracert7/ai-interview-panel" target="_blank" rel="noopener noreferrer">사용 안내 · GitHub ↗</a></header>
 <main id="main">
 <div class="room-heading"><div><p class="eyebrow">INTERVIEW ROOM</p><h1>오늘의 면접을, 여기서 먼저.</h1></div><ol class="flow" aria-label="연습 순서"><li>준비</li><li class="current" id="flow-question">질문</li><li id="flow-answer">답변</li><li id="flow-feedback">피드백</li></ol></div>
-<nav class="modes" aria-label="이용 방법"><button id="mode-example" aria-pressed="true">예제 면접 체험</button><button id="mode-work" aria-pressed="false">내 면접 준비 · Work</button><button id="mode-live" aria-pressed="false">내 답변 평가 · 로컬 API</button></nav>
+<nav class="modes" aria-label="이용 방법"><button id="mode-live" aria-pressed="false">내 구독으로 면접하기</button><button id="mode-example" aria-pressed="true">기록된 예제 보기</button><button id="mode-work" aria-pressed="false">Work 요청문</button></nav>
 <p id="mode-note" class="notice" role="status">가상 지원자의 실제 Work 실습 기록을 체험합니다. 새 AI 평가를 실행하지 않습니다.</p>
+
+<section id="auth-panel" class="auth-panel" hidden aria-labelledby="auth-heading">
+<div class="auth-intro"><div><p class="eyebrow">CONNECT YOUR CHATGPT PLAN</p><h2 id="auth-heading">ChatGPT로 로그인하고 내 구독으로 연습합니다</h2><p>별도 API 키·자동 API 결제 전환 없음. 본인 PC에서만 연결합니다.</p></div><a href="https://github.com/tracert7/ai-interview-panel#시작하기" target="_blank" rel="noopener noreferrer">GitHub 다운로드·실행 안내 ↗</a></div>
+<div class="auth-controls"><label for="auth-account">연결 계정<select id="auth-account"><option value="">새 ChatGPT 계정 연결</option></select></label><button id="auth-start" class="chatgpt-signin">Continue with ChatGPT</button><button id="auth-refresh" class="secondary">연결 새로고침</button><button id="auth-logout" class="text-button" disabled>연결 종료</button><button id="auth-cancel" class="text-button" hidden>진행 중인 로그인 취소</button></div>
+<p id="connection-state" class="connection-state" role="status">PC 실행 여부를 확인하고 있습니다.</p>
+<label for="model-select">사용할 모델 <span>로그인한 계정에서 제공되는 모델만 표시합니다.</span><select id="model-select" disabled><option value="">먼저 ChatGPT로 로그인해 주세요.</option></select></label>
+<label class="check"><input id="consent" type="checkbox">내 공고·경험·질문·답변이 OpenAI로 전송되며, 답변당 최대 3회 평가 요청이 내 ChatGPT 사용량을 소모함을 확인했습니다.</label>
+<p class="helper">한도 오류가 나면 중단하며 별도 API 키나 다른 결제 방식으로 우회하지 않습니다. 추가 크레딧 사용도 원하지 않으면 <a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPT 설정의 앱 사용량·크레딧 허용</a>을 확인하세요. 이 앱이 결제 설정을 변경하거나 크레딧을 구매하지는 않습니다.</p>
+</section>
 
 <details id="setup-panel" class="setup-panel">
 <summary><span>공고·경험 설정</span><small>지원할 업무와 실제로 맡았던 일을 정리해 주세요.</small></summary>
@@ -20,7 +29,7 @@
 <label for="facts">확인된 내 경험 <span>내가 한 일과 팀 성과를 구분</span></label><textarea id="facts" maxlength="8000" rows="5"></textarea>
 </div><div>
 <div id="work-tools" hidden><h2>Work에서 실제 에이전트 3개로 연습</h2><button id="copy-work" class="primary wide">내 내용으로 Work 요청문 복사</button><p class="helper"><a href="https://chatgpt.com/" target="_blank" rel="noopener noreferrer">ChatGPT ↗</a>의 새 대화에서 Work를 선택한 뒤 붙여 넣으세요. 계정에 따라 제공되지 않을 수 있습니다.</p><details><summary>복사할 요청문 직접 보기</summary><textarea id="prompt-view" readonly rows="8" aria-label="Work 시작 요청문"></textarea></details><button id="download-work" class="secondary wide">요청문 TXT 내려받기</button></div>
-<div id="live-settings" hidden class="connection"><strong id="connection-state">로컬 연결 확인 중</strong><p>키는 서버 환경변수에만 설정합니다. 이 화면에는 키 입력란이 없습니다. 제출 시 공고·경험·질문·답변이 OpenAI로 전송됩니다.</p><label class="check"><input id="consent" type="checkbox">내 입력 전송과 답변당 최대 3회 API 호출 비용을 확인했습니다.</label><p class="helper">자동 재시도 없음 · 90초 제한 · 중단 전 사용분은 과금될 수 있음</p></div>
+<div id="live-settings" hidden class="connection"><strong>구독 연결 후 공고와 경험을 바꿔 주세요</strong><p>처음에는 가상 예제가 들어 있습니다. 본인의 사실로 바꾸고 오른쪽 질문에 답합니다. 자동 재시도 없음 · 90초 대기 제한 · 이미 사용한 구독 사용량은 되돌릴 수 없음.</p></div>
 <div class="privacy"><strong>이 탭에서만 연습합니다</strong><p>입력과 결과를 서버 파일이나 브라우저 저장소에 보관하지 않습니다. 새로고침하면 사라지므로 필요한 기록은 직접 내보내 주세요.</p></div>
 </div></div></details>
 
@@ -45,7 +54,7 @@
 <button class="role-tab" data-speaker="practitioner" aria-pressed="false"><span class="portrait portrait-practitioner" aria-hidden="true"></span><span>현업 면접관</span><small>직무·근거</small></button></div>
 <div class="dialogue" aria-labelledby="dialogue-speaker"><span id="dialogue-speaker" class="speaker-name">인사담당자</span><p id="dialogue-kind" class="dialogue-kind">첫 질문</p><p id="dialogue-question" class="dialogue-question">지원한 이유와 이 직무에 연결되는 본인 경험을 설명해 주세요.</p><span class="dialogue-arrow" aria-hidden="true">▼</span></div>
 <details class="question-edit"><summary>이번 질문 확인·수정</summary><label for="question">이번 질문</label><textarea id="question" maxlength="1000" rows="2"></textarea></details>
-<label for="answer" class="answer-label">나의 답변 <span id="answer-count">0 / 5,000자</span></label><textarea id="answer" maxlength="5000" rows="4" placeholder="예제에서는 아래 ‘가상 첫 답변 불러오기’를 눌러보세요. 내 답변은 로컬 API 또는 Work에서 평가합니다."></textarea>
+<label for="answer" class="answer-label">나의 답변 <span id="answer-count">0 / 5,000자</span></label><textarea id="answer" maxlength="5000" rows="4" placeholder="질문에 맞춰 본인이 맡은 일과 근거를 답해보세요. 구독 로그인과 모델 선택 뒤 평가를 요청할 수 있습니다."></textarea>
 <div class="response-controls"><div id="example-tools" class="example-toolbar"><button id="first-example" class="secondary">가상 첫 답변 불러오기</button><button id="second-example" class="secondary">수정 답변 불러오기</button></div>
 <div class="actions"><button id="example-feedback" class="primary" disabled>기록된 평가 펼치기</button><button id="evaluate" class="primary" hidden>답변 제출 · 세 관점 평가</button><button id="cancel" class="secondary" hidden>평가 중단</button><button id="export" class="text-button" disabled>기록 내보내기</button><button id="reset" class="text-button">처음부터</button></div></div>
 <p id="feedback-status" class="helper" role="status" aria-live="polite">질문을 읽고 가상 첫 답변을 불러오세요.</p>
@@ -57,6 +66,6 @@
 <section id="history-section" hidden><h3>이번 탭의 연습 기록</h3><p class="helper">동일한 공고·경험·질문일 때만 비교합니다. 점수 차이는 실제 면접 실력 향상률이 아닙니다.</p><div class="table-wrap"><table><thead><tr><th>회차</th><th>인사</th><th>현업</th><th>팀장</th><th>평가 방식</th></tr></thead><tbody id="history"></tbody></table></div></section>
 </div></details></section>
 
-<details class="scope"><summary>이 면접실의 평가 방식과 확인한 범위</summary><p>픽셀 캐릭터는 역할을 구분하는 안내용입니다. 실제 사람의 표정·시선·음성을 분석하지 않습니다. 예제 점수는 ChatGPT Work의 실제 서브에이전트 3개에서 확인한 기록이며 새 계산이 아닙니다. 로컬 API는 역할별 별도 요청 세 개를 병렬 실행하며, Work 내장 서브에이전트와 다릅니다. API 유료 실호출은 아직 검증하지 않았습니다.</p><p><a href="https://github.com/tracert7/ai-interview-panel#시작하기" target="_blank" rel="noopener noreferrer">설치·비용·검증 범위 보기 ↗</a> · <a href="https://learn.chatgpt.com/docs/agent-configuration/subagents" target="_blank" rel="noopener noreferrer">OpenAI 서브에이전트 안내 ↗</a></p></details>
+<details class="scope"><summary>이 면접실의 평가 방식과 확인한 범위</summary><p>픽셀 캐릭터는 역할을 구분하는 안내용입니다. 표정·시선·음성은 분석하지 않습니다. 내 구독 면접은 서로 다른 역할 지침으로 별도 모델 요청 세 개를 병렬 실행합니다. Work 내장 서브에이전트를 호출하거나 서로 다른 기반 모델의 독립성을 검증하는 방식은 아닙니다. 기록된 예제는 과거 Work의 실제 세 서브에이전트 실습이며, 현재 사용자의 새 답변 점수가 아닙니다.</p><p><a href="https://github.com/tracert7/ai-interview-panel#시작하기" target="_blank" rel="noopener noreferrer">설치·검증 범위 보기 ↗</a> · <a href="https://developers.openai.com/siwc/token-sharing-open-source" target="_blank" rel="noopener noreferrer">OpenAI 구독 연결 안내 ↗</a></p></details>
 </main><footer>AI로 덜 일하기 · 나의 답변을 고치는 연습 · 실제 채용 평가·합격 예측이 아닙니다.</footer>
 </body></html>

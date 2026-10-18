@@ -3,6 +3,8 @@ import {roomView} from './room-state.mjs';
 const $=id=>document.getElementById(id);
 let mode='example',example,results={},history=[],controller=null,busy=false,ready=false,model=null,shownInput=null;
 let speaker='hr',exampleIndex=null;
+const localApp=['127.0.0.1','localhost'].includes(location.hostname);
+let connection=null,leavingForAuth=false;
 const status=t=>{$('feedback-status').textContent=t;};
 const make=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
 function fields(){return {job:$('job').value,facts:$('facts').value,question:$('question').value,answer:$('answer').value};}
@@ -22,7 +24,7 @@ function renderAgents(states={}){
     if(!r){card.append(make('p',states[role.id]||'답변을 기다리고 있습니다.','empty'));}
     else if(r.error){card.append(make('p',r.error,'error'));}
     else {
-      card.append(make('p',mode==='example'?'기록된 Work 평가':'API 평가 완료','state'));
+      card.append(make('p',mode==='example'?'기록된 Work 평가':'ChatGPT 구독 평가 완료','state'));
       const score=make('p',undefined,'score');score.append(document.createTextNode(r.total+' '),make('small','/ 20점'));card.append(score);
       const criteria=make('div',undefined,'criteria');r.scores.forEach((n,i)=>{const row=make('div',undefined,'criterion');row.append(make('span',CRITERIA[i]),make('strong',n+' / 4'));criteria.append(row);});card.append(criteria);
       card.append(make('div',r.quote?'답변에서 본 근거':'평가 근거','detail-label'));
@@ -42,7 +44,7 @@ function nextStep(){
   $('use-next').hidden=mode!=='live';
 }
 function addHistory(input,kind){
-  history.push({input:structuredClone(input),results:structuredClone(results),kind,at:new Date().toISOString(),model:kind==='API'?model:null});
+  history.push({input:structuredClone(input),results:structuredClone(results),kind,at:new Date().toISOString(),model:kind==='ChatGPT 구독'?model:null});
   $('history-section').hidden=false;$('export').disabled=false;
   const row=make('tr');row.append(make('td',String(history.length)));
   for(const role of ROLES)row.append(make('td',results[role.id]?.total===undefined?'미완료':results[role.id].total+'점'));
@@ -59,23 +61,21 @@ function setBusy(value){
   for(const el of document.querySelectorAll('button,textarea,input'))el.disabled=value;
   $('cancel').disabled=false;$('cancel').hidden=!value;
   $('export').disabled=value||!history.length;
-  $('evaluate').disabled=value||!ready;
+  updateEvaluateAvailability();
+  if(!value){$('auth-start').disabled=!localApp;$('auth-refresh').disabled=!localApp;$('auth-logout').disabled=!connection?.connected;$('model-select').disabled=!ready;}
   renderRoom();
 }
 async function setMode(value){
-  if(busy)return;if(history.some(h=>h.kind==='API')&&!confirm('모드를 바꾸면 현재 평가 기록이 지워집니다. 필요하면 먼저 내보내 주세요. 계속할까요?'))return;mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
+  if(busy)return;if(history.some(h=>h.kind==='API'||h.kind==='ChatGPT 구독')&&!confirm('모드를 바꾸면 현재 평가 기록이 지워집니다. 필요하면 먼저 내보내 주세요. 계속할까요?'))return;mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
   for(const m of ['example','work','live'])$('mode-'+m).setAttribute('aria-pressed',String(m===mode));
   $('work-tools').hidden=mode!=='work';$('work-guide').hidden=mode!=='work';$('practice-panel').hidden=mode==='work';$('live-settings').hidden=mode!=='live';$('example-tools').hidden=mode!=='example';$('evaluate').hidden=mode!=='live';
   $('setup-panel').open=mode!=='example';$('example-feedback').hidden=mode!=='example';$('example-feedback').disabled=true;exampleIndex=null;
+  $('auth-panel').hidden=mode!=='live';
   for(const id of ['job','facts','question','answer'])$(id).readOnly=mode==='example';
-  $('mode-note').textContent={example:'실제로 진행한 가상 지원자의 Work 실습 기록입니다. 예제 버튼은 새 AI 평가를 실행하지 않습니다.',work:'내 공고와 경험으로 시작 요청문을 만들고 ChatGPT Work에서 실제 서브에이전트 3개를 실행합니다. 이 페이지는 Work 대화를 자동으로 읽지 않습니다.',live:'본인 PC의 서버에서 역할별 API 요청 3개를 병렬 실행합니다. API 비용은 ChatGPT 구독과 별개이며, 제출할 때만 전송합니다.'}[mode];
-  status(mode==='example'?'질문을 읽고 가상 첫 답변을 불러오세요.':mode==='work'?'공고·경험을 바꾸고 요청문을 복사하세요.':'공고·경험·질문·답변을 입력하고 전송 동의를 확인하세요.');
+  $('mode-note').textContent={example:localApp?'기록된 Work 예제입니다. 새 AI 평가를 실행하지 않습니다. 내 답변은 ‘내 구독으로 면접하기’에서 제출하세요.':'이 웹 주소는 기록된 예제 화면입니다. 실제 면접은 GitHub에서 내려받아 PC에서 실행하고 ChatGPT로 로그인하세요.',work:'내 공고와 경험으로 요청문을 만들고 ChatGPT Work에서 실행합니다. 이 페이지는 Work 대화를 자동으로 읽지 않습니다.',live:'본인 PC에서 ChatGPT로 로그인 → 사용 가능한 모델 선택 → 내 답변 제출. 별도 API 키·자동 API 결제 전환 없음.'}[mode];
+  status(mode==='example'?'질문을 읽고 가상 첫 답변을 불러오세요.':mode==='work'?'공고·경험을 바꾸고 요청문을 복사하세요.':'로그인·모델 선택·전송 동의 뒤에 내 답변을 제출하세요.');
   if(mode==='live'){
-    ready=false;$('evaluate').disabled=true;
-    if(!['127.0.0.1','localhost'].includes(location.hostname)){$('connection-state').textContent='공개 페이지는 예제·Work 요청문용입니다. 실제 API 평가는 README의 로컬 실행을 이용하세요.';return;}
-    try{const r=await fetch('/api/config');if(!r.ok)throw Error();const cfg=await r.json();ready=cfg.ready;model=cfg.model;$('connection-state').textContent=ready?'로컬 서버 연결됨 · 모델 '+model:'서버 연결됨 · API 키와 모델 설정 필요';}
-    catch{$('connection-state').textContent='로컬 서버가 연결되지 않았습니다. README의 실행 순서를 확인하세요.';}
-    $('evaluate').disabled=!ready;
+    await refreshConnection();
   }
   updatePrompt();
   renderRoom();
@@ -95,14 +95,15 @@ function showExample(index){
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=make('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function evaluate(){
   if(busy)return;
-  if(!$('consent').checked){status('입력 전송과 API 호출 비용 동의를 먼저 확인해 주세요.');$('consent').focus();return;}
+  if(!ready||!$('model-select').value){status('먼저 ChatGPT 로그인과 모델 선택을 완료해 주세요.');$('auth-panel').scrollIntoView({block:'start',behavior:'auto'});return;}
+  if(!$('consent').checked){status('입력 전송과 내 ChatGPT 사용량 소모 동의를 먼저 확인해 주세요.');$('consent').focus();return;}
   let input;try{input=validateInput(fields());}catch(e){status(e.message);return;}
   const prior=history.at(-1);
   if(prior&&['job','facts','question'].some(k=>prior.input[k]!==input[k])){history=[];$('history').replaceChildren();$('history-section').hidden=true;}
   clearResult();shownInput=input;setBusy(true);controller=new AbortController();
-  const pending=Object.fromEntries(ROLES.map(r=>[r.id,'평가 중 · 다른 역할의 결과는 전달하지 않습니다.']));renderAgents(pending);status('세 평가를 요청했습니다. 결과가 도착한 역할부터 표시합니다.');
+  const pending=Object.fromEntries(ROLES.map(r=>[r.id,'구독 평가 중 · 다른 역할의 결과는 전달하지 않습니다.']));renderAgents(pending);status('내 구독으로 세 평가를 요청했습니다. 결과가 도착한 역할부터 표시합니다.');
   try{
-    const r=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json','X-Interview-Client':'1'},body:JSON.stringify(input),signal:controller.signal});
+    const r=await fetch('/api/evaluate',{method:'POST',headers:{'Content-Type':'application/json','X-Interview-Client':'1'},body:JSON.stringify({...input,model:$('model-select').value}),signal:controller.signal});
     if(!r.ok){let msg='서버 요청이 실패했습니다.';try{msg=(await r.json()).error||msg;}catch{}throw Error(msg);}
     const reader=r.body.getReader(),decoder=new TextDecoder();let buffer='',doneSeen=false;
     const event=line=>{if(!line.trim())return;const msg=JSON.parse(line);if(msg.type==='result')results[msg.result.role]=msg.result;if(msg.type==='error')results[msg.role]={error:msg.error};if(msg.type==='done')doneSeen=true;renderAgents(pending);};
@@ -110,10 +111,10 @@ async function evaluate(){
     if(buffer.trim())event(buffer);
     if(!doneSeen)throw Error('연결이 끝나 일부 평가가 도착하지 않았습니다.');
     const completed=ROLES.filter(r=>results[r.id]&&!results[r.id].error).length;status(completed+'개 평가 완료. 실패 항목은 자동 재시도하지 않았습니다.');
-  }catch(e){status(e.name==='AbortError'?'평가를 중단했습니다. 이미 사용한 API 비용은 발생할 수 있습니다.':e.message);}
+  }catch(e){status(e.name==='AbortError'?'평가를 중단했습니다. 이미 소모된 구독 사용량은 되돌릴 수 없습니다.':e.message);}
   finally{
     for(const role of ROLES)if(!results[role.id])results[role.id]={error:'완료되지 않았습니다. 자동 재요청하지 않았습니다.'};
-    renderAgents();nextStep();addHistory(input,'API');setBusy(false);controller=null;$('feedback-panel').open=true;
+    renderAgents();nextStep();addHistory(input,'ChatGPT 구독');setBusy(false);controller=null;$('feedback-panel').open=true;
   }
 }
 for(const m of ['example','work','live'])$('mode-'+m).addEventListener('click',()=>setMode(m));
@@ -127,6 +128,36 @@ $('export').addEventListener('click',()=>download('interview-session.json',JSON.
 $('evaluate').addEventListener('click',evaluate);$('cancel').addEventListener('click',()=>controller?.abort());
 $('use-next').addEventListener('click',()=>{$('question').value=$('next-question').textContent;$('answer').value='';clearResult();updateCount();$('answer').focus();status('이 꼬리질문에 답변해 보세요. 제출하기 전에는 추가 호출하지 않습니다.');});
 $('reset').addEventListener('click',()=>{if(busy)return;if(!confirm('이 탭의 입력과 연습 기록을 지울까요? 내보내지 않은 내용은 복구할 수 없습니다.'))return;for(const id of ['job','facts','answer'])$(id).value='';$('question').value=QUESTION;history=[];exampleIndex=null;$('example-feedback').disabled=true;$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;clearResult();updateCount();updatePrompt();status('입력과 기록을 지웠습니다. 예제는 ‘가상 첫 답변 불러오기’에서 다시 열 수 있습니다.');});
-window.addEventListener('beforeunload',e=>{if(busy||(mode!=='example'&&$('answer').value.trim())){e.preventDefault();e.returnValue='';}});
-try{const r=await fetch('example.json');if(!r.ok)throw Error();example=await r.json();$('job').value=example.job;$('facts').value=example.facts;$('question').value=example.question;await setMode('example');}
+function updateEvaluateAvailability(){$('evaluate').disabled=busy||!ready||!$('model-select').value;}
+async function authPost(action,data={}){const r=await fetch('/api/auth/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Interview-Client':'1'},body:JSON.stringify(data)});const out=await r.json();if(!r.ok)throw Error(out.error||'연결 요청이 실패했습니다.');return out;}
+async function refreshConnection(){
+  ready=false;updateEvaluateAvailability();$('model-select').disabled=true;
+  if(!localApp){$('connection-state').textContent='실제 구독 연결은 PC 실행판에서만 가능합니다. GitHub에서 내려받아 START-WINDOWS.cmd를 실행해 주세요.';$('auth-start').disabled=true;$('auth-refresh').disabled=true;return;}
+  try{
+    const r=await fetch('/api/config');if(!r.ok)throw Error('로컬 앱에 연결하지 못했습니다.');connection=await r.json();
+    const select=$('auth-account');select.replaceChildren();for(const account of connection.accounts||[]){const option=make('option',account.label);option.value=account.id;select.append(option);}const fresh=make('option','새 ChatGPT 계정 연결');fresh.value='';select.append(fresh);select.value=connection.activeId||connection.defaultAccountId||'';
+    $('auth-logout').disabled=!connection.connected;$('auth-cancel').hidden=!connection.signInPending;
+    $('connection-state').textContent=connection.error||connection.notice||(connection.sharing?'구독 사용 권한 연결됨. 사용할 모델을 선택해 주세요.':connection.connected?'로그인은 됐지만 구독 사용 권한을 확인하지 못했습니다. 다시 연결해 주세요.':'로그인 전입니다. Continue with ChatGPT를 눌러 계정과 구독 사용을 허용해 주세요.');
+    if(connection.sharing||connection.recoveryPending){
+      const old=$('model-select').value;const mr=await fetch('/api/models');const data=await mr.json();if(!mr.ok)throw Error(data.error||'모델 목록을 불러오지 못했습니다.');
+      $('model-select').replaceChildren();const placeholder=make('option','사용할 모델을 선택해 주세요.');placeholder.value='';$('model-select').append(placeholder);
+      for(const m of data.models){const option=make('option',m.name);option.value=m.id;$('model-select').append(option);}
+      if(data.models.some(m=>m.id===old))$('model-select').value=old;ready=data.models.length>0;$('model-select').disabled=!ready;
+      if(!ready)$('connection-state').textContent='이 계정에서 사용할 모델을 받지 못했습니다. 구독·앱 권한을 확인해 주세요.';
+    }else{$('model-select').replaceChildren(make('option','먼저 ChatGPT로 로그인해 주세요.'));$('model-select').value='';}
+  }catch(e){$('connection-state').textContent=e.message;ready=false;}
+  updateEvaluateAvailability();
+}
+$('model-select').addEventListener('change',()=>{model=$('model-select').value;updateEvaluateAvailability();});
+$('auth-refresh').addEventListener('click',refreshConnection);
+$('auth-account').addEventListener('change',async()=>{$('consent').checked=false;if(!$('auth-account').value)return;try{await authPost('select',{accountId:$('auth-account').value});await refreshConnection();}catch(e){$('connection-state').textContent=e.message;}});
+$('auth-start').addEventListener('click',async()=>{
+  if(!localApp||busy)return;$('auth-start').disabled=true;
+  try{const data=await authPost('start',{accountId:$('auth-account').value||null,draft:fields()});if(new URL(data.url).origin!=='https://auth.openai.com')throw Error('공식 로그인 주소가 아닙니다.');leavingForAuth=true;location.assign(data.url);}
+  catch(e){$('connection-state').textContent=e.message;$('auth-start').disabled=false;}
+});
+$('auth-logout').addEventListener('click',async()=>{if(!confirm('이 PC에서 선택한 ChatGPT 계정의 연결을 종료할까요?'))return;try{const result=await authPost('logout');await refreshConnection();$('connection-state').textContent=result.notice;}catch(e){$('connection-state').textContent=e.message;}});
+$('auth-cancel').addEventListener('click',async()=>{try{await authPost('cancel');await refreshConnection();}catch(e){$('connection-state').textContent=e.message;}});
+window.addEventListener('beforeunload',e=>{if(!leavingForAuth&&(busy||(mode!=='example'&&$('answer').value.trim()))){e.preventDefault();e.returnValue='';}});
+try{const r=await fetch('example.json');if(!r.ok)throw Error();example=await r.json();$('job').value=example.job;$('facts').value=example.facts;$('question').value=example.question;await setMode(localApp?'live':'example');if(localApp){const saved=await fetch('/api/draft',{headers:{'X-Interview-Client':'1'}});if(saved.ok){const {draft}=await saved.json();if(draft){for(const k of ['job','facts','question','answer'])if(typeof draft[k]==='string')$(k).value=draft[k];updateCount();updatePrompt();renderRoom();}}}}
 catch{status('예제 파일을 불러오지 못했습니다. HTTP 서버나 GitHub Pages에서 열어 주세요.');renderAgents();$('first-example').disabled=true;$('second-example').disabled=true;}
