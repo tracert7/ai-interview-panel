@@ -1,16 +1,20 @@
 import {ROLES,CRITERIA,QUESTION,workPrompt,validateInput} from './core.mjs';
 import {roomView} from './room-state.mjs';
+import {DOCUMENT_LIMITS,validateDocuments,validateQuestionInput} from './document-core.mjs';
+import {createVoiceInput} from './voice.mjs';
 const $=id=>document.getElementById(id);
 let mode='example',example,results={},history=[],controller=null,busy=false,ready=false,model=null,shownInput=null;
 let speaker='hr',exampleIndex=null;
 const localApp=['127.0.0.1','localhost'].includes(location.hostname);
 let connection=null,leavingForAuth=false;
+let documents=[],documentQuestions=[],task='evaluation';
 const status=t=>{$('feedback-status').textContent=t;};
 const make=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
-function fields(){return {job:$('job').value,facts:$('facts').value,question:$('question').value,answer:$('answer').value};}
+function fields(){return {job:$('job').value,facts:$('facts').value||((mode==='live'&&documents.length)?'별도 경험 메모 없음. 첨부 서류의 업무 경험을 참고하세요.':''),question:$('question').value,answer:$('answer').value,...(mode==='live'&&documents.length?{documents:documents.map(({name,text})=>({name,text}))}:{})};}
 function renderRoom(){
   const v=roomView({speaker,question:$('question').value,results,busy,answerLoaded:!!$('answer').value.trim(),exampleMode:mode==='example'});
   $('dialogue-speaker').textContent=v.speaker;$('dialogue-kind').textContent=v.kind;$('dialogue-question').textContent=v.text;$('room-state').textContent=v.state;
+  if(busy&&task!=='evaluation')$('room-state').textContent=task==='questions'?'서류 질문 준비 중':'서류 읽는 중';
   for(const el of document.querySelectorAll('[data-speaker]'))el.setAttribute('aria-pressed',String(el.dataset.speaker===v.role));
   for(const phase of ['question','answer','feedback'])$('flow-'+phase).classList.toggle('current',phase===v.phase);
   $('feedback-summary').textContent=Object.keys(results).length?'평가 근거와 다음에 고칠 문장을 읽어보세요.':'답변 뒤에 근거·보완점·꼬리질문을 확인합니다.';
@@ -56,21 +60,24 @@ function editableChanged(){
   if(shownInput){clearResult();status('입력이 달라져 이전 결과를 숨겼습니다. 이전 기록은 내보내기에 남아 있습니다.');}
   renderRoom();
 }
-function setBusy(value){
-  busy=value;
-  for(const el of document.querySelectorAll('button,textarea,input'))el.disabled=value;
+function setBusy(value,kind='evaluation'){
+  if(value)voice.stop({discard:true});busy=value;task=kind;
+  for(const el of document.querySelectorAll('button,textarea,input,select'))el.disabled=value;
   $('cancel').disabled=false;$('cancel').hidden=!value;
   $('export').disabled=value||!history.length;
   updateEvaluateAvailability();
   if(!value){$('auth-start').disabled=!localApp;$('auth-refresh').disabled=!localApp;$('auth-logout').disabled=!connection?.connected;$('model-select').disabled=!ready;}
+  updateTools();
   renderRoom();
 }
 async function setMode(value){
-  if(busy)return;if(history.some(h=>h.kind==='API'||h.kind==='ChatGPT 구독')&&!confirm('모드를 바꾸면 현재 평가 기록이 지워집니다. 필요하면 먼저 내보내 주세요. 계속할까요?'))return;mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
+  if(busy)return;if(history.some(h=>h.kind==='API'||h.kind==='ChatGPT 구독')&&!confirm('모드를 바꾸면 현재 평가 기록이 지워집니다. 필요하면 먼저 내보내 주세요. 계속할까요?'))return;voice.stop({discard:true});mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
   for(const m of ['example','work','live'])$('mode-'+m).setAttribute('aria-pressed',String(m===mode));
   $('work-tools').hidden=mode!=='work';$('work-guide').hidden=mode!=='work';$('practice-panel').hidden=mode==='work';$('live-settings').hidden=mode!=='live';$('example-tools').hidden=mode!=='example';$('evaluate').hidden=mode!=='live';
-  $('setup-panel').open=mode!=='example';$('example-feedback').hidden=mode!=='example';$('example-feedback').disabled=true;exampleIndex=null;
+  $('setup-panel').open=mode==='work';$('example-feedback').hidden=mode!=='example';$('example-feedback').disabled=true;exampleIndex=null;
+  invalidateQuestions();
   $('auth-panel').hidden=mode!=='live';
+  $('documents-panel').hidden=mode!=='live';$('voice-tools').hidden=mode!=='live';
   for(const id of ['job','facts','question','answer'])$(id).readOnly=mode==='example';
   $('mode-note').textContent={example:localApp?'기록된 Work 예제입니다. 새 AI 평가를 실행하지 않습니다. 내 답변은 ‘내 구독으로 면접하기’에서 제출하세요.':'이 웹 주소는 기록된 예제 화면입니다. 실제 면접은 GitHub에서 내려받아 PC에서 실행하고 ChatGPT로 로그인하세요.',work:'내 공고와 경험으로 요청문을 만들고 ChatGPT Work에서 실행합니다. 이 페이지는 Work 대화를 자동으로 읽지 않습니다.',live:'본인 PC에서 ChatGPT로 로그인 → 사용 가능한 모델 선택 → 내 답변 제출. 별도 API 키·자동 API 결제 전환 없음.'}[mode];
   status(mode==='example'?'질문을 읽고 가상 첫 답변을 불러오세요.':mode==='work'?'공고·경험을 바꾸고 요청문을 복사하세요.':'로그인·모델 선택·전송 동의 뒤에 내 답변을 제출하세요.');
@@ -78,6 +85,7 @@ async function setMode(value){
     await refreshConnection();
   }
   updatePrompt();
+  updateTools();
   renderRoom();
 }
 function loadExample(index){
@@ -95,11 +103,10 @@ function showExample(index){
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=make('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function evaluate(){
   if(busy)return;
-  if(!ready||!$('model-select').value){status('먼저 ChatGPT 로그인과 모델 선택을 완료해 주세요.');$('auth-panel').scrollIntoView({block:'start',behavior:'auto'});return;}
-  if(!$('consent').checked){status('입력 전송과 내 ChatGPT 사용량 소모 동의를 먼저 확인해 주세요.');$('consent').focus();return;}
+  voice.stop({discard:true});if(!requirePlan())return;
   let input;try{input=validateInput(fields());}catch(e){status(e.message);return;}
   const prior=history.at(-1);
-  if(prior&&['job','facts','question'].some(k=>prior.input[k]!==input[k])){history=[];$('history').replaceChildren();$('history-section').hidden=true;}
+  if(prior&&['job','facts','question','documents'].some(k=>JSON.stringify(prior.input[k])!==JSON.stringify(input[k]))){history=[];$('history').replaceChildren();$('history-section').hidden=true;}
   clearResult();shownInput=input;setBusy(true);controller=new AbortController();
   const pending=Object.fromEntries(ROLES.map(r=>[r.id,'구독 평가 중 · 다른 역할의 결과는 전달하지 않습니다.']));renderAgents(pending);status('내 구독으로 세 평가를 요청했습니다. 결과가 도착한 역할부터 표시합니다.');
   try{
@@ -117,8 +124,81 @@ async function evaluate(){
     renderAgents();nextStep();addHistory(input,'ChatGPT 구독');setBusy(false);controller=null;$('feedback-panel').open=true;
   }
 }
+function requirePlan(){
+  if(!localApp||!ready||!$('model-select').value){status('먼저 PC 실행판에서 ChatGPT 로그인과 모델 선택을 완료해 주세요.');$('connection-details').open=true;$('auth-panel').scrollIntoView({block:'start',behavior:'auto'});return false;}
+  if(!$('consent').checked){status('전송할 본문과 구독 사용량 안내를 확인하고 동의해 주세요.');$('connection-details').open=true;$('consent').focus();return false;}
+  return true;
+}
+function updateTools(){
+  $('generate-questions').disabled=busy||!localApp||!documents.length;
+  $('document-files').disabled=busy||!localApp;
+  $('voice-start').disabled=busy||!voice.supported||voice.active||mode!=='live';
+  $('voice-stop').disabled=busy;
+}
+function invalidateQuestions(){documentQuestions=[];$('question-bank').replaceChildren();$('question-bank').hidden=true;$('consent').checked=false;}
+function renderDocuments(){
+  $('document-count').textContent='첨부 '+documents.length+' / 3';$('document-list').replaceChildren();
+  for(const doc of documents){
+    const details=make('details',undefined,'document-preview'),summary=make('summary',doc.name+' · '+doc.text.length.toLocaleString()+'자');details.append(summary);
+    const content=make('div',undefined,'document-body');for(const note of doc.notes||[])content.append(make('p',note,'helper'));
+    const label=make('label','AI에 보낼 본문 — 개인정보·누락을 확인하고 수정하세요.');const area=make('textarea');area.value=doc.text;area.rows=7;area.maxLength=DOCUMENT_LIMITS.characters;area.setAttribute('aria-label',doc.name+' 본문 미리보기·수정');
+    area.addEventListener('input',()=>{doc.text=area.value;summary.textContent=doc.name+' · '+doc.text.length.toLocaleString()+'자';invalidateQuestions();editableChanged();});
+    label.append(area);content.append(label);
+    const remove=make('button','이 서류 지우기','text-button');remove.addEventListener('click',()=>{documents=documents.filter(d=>d!==doc);invalidateQuestions();renderDocuments();editableChanged();$('document-status').textContent='서류를 이 탭에서 지웠습니다. 이미 전송한 내용은 OpenAI에서 회수하지 않습니다.';});content.append(remove);details.append(content);$('document-list').append(details);
+  }updateTools();
+}
+function fileBase64(file){return new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('파일을 읽지 못했습니다. 다시 선택해 주세요.'));reader.readAsDataURL(file);});}
+async function attachFiles(){
+  const files=Array.from($('document-files').files||[]);$('document-files').value='';if(!files.length||busy)return;
+  if(documents.length+files.length>3){$('document-status').textContent='서류는 최대 3개입니다. 기존 첨부를 지운 뒤 선택해 주세요.';return;}
+  if(files.some(f=>f.size>DOCUMENT_LIMITS.bytes||f.name.length>150)){$('document-status').textContent='파일당 5MiB, 파일 이름 150자까지입니다.';return;}
+  controller=new AbortController();setBusy(true,'reading');
+  try{
+    for(const file of files){
+      $('document-status').textContent=file.name+'을 PC에서 읽고 있습니다. OpenAI로 보내지 않습니다.';
+      const r=await fetch('/api/documents/read',{method:'POST',headers:{'Content-Type':'application/json','X-Interview-Client':'1'},body:JSON.stringify({name:file.name,data:await fileBase64(file)}),signal:controller.signal});
+      const data=await r.json();if(!r.ok)throw Error(data.error||'파일을 읽지 못했습니다.');
+      validateDocuments([...documents,data.document]);documents.push(data.document);invalidateQuestions();renderDocuments();for(const el of $('document-list').querySelectorAll('button,textarea'))el.disabled=true;
+    }
+    clearResult();$('document-status').textContent='서류를 읽었습니다. 파일명을 눌러 본문을 확인한 뒤 전송 동의와 ‘서류로 질문 받기’를 선택하세요.';
+  }catch(e){$('document-status').textContent=e.name==='AbortError'?'서류 읽기를 중단했습니다. 이미 읽은 첨부만 남겼습니다.':e.message;}
+  finally{setBusy(false);controller=null;}
+}
+function renderQuestions(){
+  $('question-bank').replaceChildren();$('question-bank').hidden=!documentQuestions.length;
+  for(const q of documentQuestions){
+    const article=make('article',undefined,'document-question');article.append(make('h3',ROLES.find(r=>r.id===q.role).name),make('p',q.question),make('p',q.intent,'question-intent'));
+    const evidence=make('details');evidence.append(make('summary','근거: '+q.source),make('blockquote',q.quote));article.append(evidence);
+    const choose=make('button','이 질문으로 면접 시작','secondary');choose.addEventListener('click',()=>{
+      if(busy||($('answer').value.trim()&&!confirm('현재 답변을 지우고 이 질문으로 시작할까요? 필요한 답변은 먼저 내보내거나 복사해 주세요.')))return;
+      voice.stop({discard:true});speaker=q.role;$('question').value=q.question;$('answer').value='';clearResult();updateCount();$('practice-panel').scrollIntoView({block:'start',behavior:'auto'});$('answer').focus();status('선택한 서류 질문입니다. 말로 답하거나 직접 입력한 뒤 평가를 요청하세요.');
+    });article.append(choose);$('question-bank').append(article);
+  }
+}
+async function askFromDocuments(){
+  if(busy||!requirePlan())return;let input;try{input=validateQuestionInput(fields());}catch(e){$('document-status').textContent=e.message;return;}
+  controller=new AbortController();setBusy(true,'questions');$('document-status').textContent='확인한 본문으로 질문을 만들고 있습니다. 내 구독 사용량 1회 요청 · 자동 재시도 없음.';
+  try{
+    const r=await fetch('/api/questions',{method:'POST',headers:{'Content-Type':'application/json','X-Interview-Client':'1'},body:JSON.stringify({...input,model:$('model-select').value}),signal:controller.signal}),data=await r.json();
+    if(!r.ok)throw Error(data.error||'질문을 받지 못했습니다.');documentQuestions=data.questions;renderQuestions();$('document-status').textContent='세 역할의 질문과 서류 원문 인용을 확인했습니다. 연습할 질문을 선택하세요.';
+  }catch(e){$('document-status').textContent=e.name==='AbortError'?'질문 생성을 중단했습니다. 이미 사용한 구독 사용량은 되돌릴 수 없습니다.':e.message;}
+  finally{setBusy(false);controller=null;}
+}
+const voice=createVoiceInput({Recognition:window.SpeechRecognition||window.webkitSpeechRecognition,
+  onText:text=>{const area=$('answer'),joined=area.value+(area.value&&!/\s$/.test(area.value)?' ':'')+text;if(joined.length>5000){voice.stop({discard:true});$('voice-status').textContent='5,000자 한도입니다. 일부 문장을 정리한 뒤 다시 입력해 주세요.';return;}area.value=joined;editableChanged();},
+  onInterim:text=>{$('voice-interim').textContent=text;},
+  onState:active=>{$('voice-stop').hidden=!active;$('voice-indicator').hidden=!active;$('voice-start').setAttribute('aria-pressed',String(active));$('answer').classList.toggle('listening',active);updateTools();},
+  onMessage:message=>{$('voice-status').textContent=message;}
+});
+if(!voice.supported)$('voice-status').textContent='이 브라우저는 음성 입력을 지원하지 않습니다. Chrome에서 열거나 키보드로 입력해 주세요.';
+$('voice-start').addEventListener('click',()=>{if(busy||mode!=='live')return;if(!$('voice-consent').checked){document.querySelector('.voice-privacy').open=true;$('voice-consent').focus();$('voice-status').textContent='마이크 사용 안내를 확인하고 동의한 뒤 시작해 주세요.';return;}voice.start();});
+$('voice-stop').addEventListener('click',()=>voice.stop());
+$('voice-consent').addEventListener('change',()=>{if(!$('voice-consent').checked)voice.stop({discard:true});});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)voice.stop({discard:true});});
+$('document-files').addEventListener('change',attachFiles);$('generate-questions').addEventListener('click',askFromDocuments);
 for(const m of ['example','work','live'])$('mode-'+m).addEventListener('click',()=>setMode(m));
 for(const id of ['job','facts','question','answer'])$(id).addEventListener('input',editableChanged);
+for(const id of ['job','facts'])$(id).addEventListener('input',invalidateQuestions);
 $('first-example').addEventListener('click',()=>loadExample(0));$('second-example').addEventListener('click',()=>loadExample(1));
 $('example-feedback').addEventListener('click',()=>{if(exampleIndex!==null)showExample(exampleIndex);});
 for(const el of document.querySelectorAll('[data-speaker]'))el.addEventListener('click',()=>{if(busy)return;speaker=el.dataset.speaker;renderAgents();});
@@ -126,8 +206,8 @@ $('copy-work').addEventListener('click',async()=>{updatePrompt();try{await navig
 $('download-work').addEventListener('click',()=>{updatePrompt();download('work-interview-start.txt',$('prompt-view').value,'text/plain;charset=utf-8');});
 $('export').addEventListener('click',()=>download('interview-session.json',JSON.stringify({version:1,notice:'면접 연습 기록. 실제 채용 점수나 합격률이 아님.',history},null,2),'application/json'));
 $('evaluate').addEventListener('click',evaluate);$('cancel').addEventListener('click',()=>controller?.abort());
-$('use-next').addEventListener('click',()=>{$('question').value=$('next-question').textContent;$('answer').value='';clearResult();updateCount();$('answer').focus();status('이 꼬리질문에 답변해 보세요. 제출하기 전에는 추가 호출하지 않습니다.');});
-$('reset').addEventListener('click',()=>{if(busy)return;if(!confirm('이 탭의 입력과 연습 기록을 지울까요? 내보내지 않은 내용은 복구할 수 없습니다.'))return;for(const id of ['job','facts','answer'])$(id).value='';$('question').value=QUESTION;history=[];exampleIndex=null;$('example-feedback').disabled=true;$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;clearResult();updateCount();updatePrompt();status('입력과 기록을 지웠습니다. 예제는 ‘가상 첫 답변 불러오기’에서 다시 열 수 있습니다.');});
+$('use-next').addEventListener('click',()=>{voice.stop({discard:true});$('question').value=$('next-question').textContent;$('answer').value='';clearResult();updateCount();$('answer').focus();status('이 꼬리질문에 답변해 보세요. 제출하기 전에는 추가 호출하지 않습니다.');});
+$('reset').addEventListener('click',()=>{if(busy)return;if(!confirm('이 탭의 서류·입력·연습 기록을 지울까요? 내보내지 않은 내용은 복구할 수 없습니다.'))return;voice.stop({discard:true});documents=[];invalidateQuestions();renderDocuments();for(const id of ['job','facts','answer'])$(id).value='';$('question').value=QUESTION;history=[];exampleIndex=null;$('example-feedback').disabled=true;$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;clearResult();updateCount();updatePrompt();status('입력과 기록을 지웠습니다. 예제는 ‘가상 첫 답변 불러오기’에서 다시 열 수 있습니다.');});
 function updateEvaluateAvailability(){$('evaluate').disabled=busy||!ready||!$('model-select').value;}
 async function authPost(action,data={}){const r=await fetch('/api/auth/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Interview-Client':'1'},body:JSON.stringify(data)});const out=await r.json();if(!r.ok)throw Error(out.error||'연결 요청이 실패했습니다.');return out;}
 async function refreshConnection(){
@@ -148,16 +228,18 @@ async function refreshConnection(){
   }catch(e){$('connection-state').textContent=e.message;ready=false;}
   updateEvaluateAvailability();
 }
-$('model-select').addEventListener('change',()=>{model=$('model-select').value;updateEvaluateAvailability();});
+$('model-select').addEventListener('change',()=>{model=$('model-select').value;updateEvaluateAvailability();$('connection-badge').textContent=model?'연결됨 · 모델 선택 완료':'사용할 모델 선택';if(model&&$('consent').checked)$('connection-details').open=false;});
+$('consent').addEventListener('change',()=>{if($('consent').checked&&$('model-select').value)$('connection-details').open=false;});
 $('auth-refresh').addEventListener('click',refreshConnection);
 $('auth-account').addEventListener('change',async()=>{$('consent').checked=false;if(!$('auth-account').value)return;try{await authPost('select',{accountId:$('auth-account').value});await refreshConnection();}catch(e){$('connection-state').textContent=e.message;}});
 $('auth-start').addEventListener('click',async()=>{
   if(!localApp||busy)return;$('auth-start').disabled=true;
+  voice.stop({discard:true});if(documents.length&&!confirm('로그인 화면으로 이동하면 첨부 본문은 사라집니다. 로그인 후 다시 첨부할까요?')){$('auth-start').disabled=false;return;}
   try{const data=await authPost('start',{accountId:$('auth-account').value||null,draft:fields()});if(new URL(data.url).origin!=='https://auth.openai.com')throw Error('공식 로그인 주소가 아닙니다.');leavingForAuth=true;location.assign(data.url);}
   catch(e){$('connection-state').textContent=e.message;$('auth-start').disabled=false;}
 });
 $('auth-logout').addEventListener('click',async()=>{if(!confirm('이 PC에서 선택한 ChatGPT 계정의 연결을 종료할까요?'))return;try{const result=await authPost('logout');await refreshConnection();$('connection-state').textContent=result.notice;}catch(e){$('connection-state').textContent=e.message;}});
 $('auth-cancel').addEventListener('click',async()=>{try{await authPost('cancel');await refreshConnection();}catch(e){$('connection-state').textContent=e.message;}});
-window.addEventListener('beforeunload',e=>{if(!leavingForAuth&&(busy||(mode!=='example'&&$('answer').value.trim()))){e.preventDefault();e.returnValue='';}});
+window.addEventListener('beforeunload',e=>{voice.stop({discard:true});if(!leavingForAuth&&(busy||documents.length||(mode!=='example'&&$('answer').value.trim()))){e.preventDefault();e.returnValue='';}});
 try{const r=await fetch('example.json');if(!r.ok)throw Error();example=await r.json();$('job').value=example.job;$('facts').value=example.facts;$('question').value=example.question;await setMode(localApp?'live':'example');if(localApp){const saved=await fetch('/api/draft',{headers:{'X-Interview-Client':'1'}});if(saved.ok){const {draft}=await saved.json();if(draft){for(const k of ['job','facts','question','answer'])if(typeof draft[k]==='string')$(k).value=draft[k];updateCount();updatePrompt();renderRoom();}}}}
 catch{status('예제 파일을 불러오지 못했습니다. HTTP 서버나 GitHub Pages에서 열어 주세요.');renderAgents();$('first-example').disabled=true;$('second-example').disabled=true;}

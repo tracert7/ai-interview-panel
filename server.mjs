@@ -6,13 +6,16 @@ import {spawn} from 'node:child_process';
 import {ROLES,validateInput} from './docs/core.mjs';
 import {ChatGPTAuth} from './lib/chatgpt-auth.mjs';
 import {evaluateRole} from './lib/plan-inference.mjs';
+import {generateQuestions} from './lib/question-plan.mjs';
+import {readDocument} from './lib/document-reader.mjs';
+import {validateQuestionInput} from './docs/document-core.mjs';
 export {evaluateRole} from './lib/plan-inference.mjs';
 const ROOT=path.resolve(fileURLToPath(new URL('./docs/',import.meta.url)));
 const PRIVATE=fileURLToPath(new URL('./.private/',import.meta.url));
 const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.txt':'text/plain; charset=utf-8','.jpg':'image/jpeg','.png':'image/png'};
 export function createApp({auth,fetchImpl=fetch}={}){
   auth ||= new ChatGPTAuth({directory:PRIVATE,fetchImpl});
-  let busy=false,lastStarted=0,authNotice=null,pendingDraft=null;
+  let busy=false,parseBusy=false,lastStarted=0,authNotice=null,pendingDraft=null;
   const server=http.createServer(async(req,res)=>{
     const host=req.headers.host||'',origin=req.headers.origin;
     const headers={'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"};
@@ -20,7 +23,7 @@ export function createApp({auth,fetchImpl=fetch}={}){
     if(!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(host)||(origin&&origin!=='http://'+host))return json(403,{error:'같은 PC의 면접실에서만 사용할 수 있습니다.'});
     const base='http://'+host,url=new URL(req.url,base);
     const protectedPost=()=>origin===base&&req.headers['x-interview-client']==='1'&&req.headers['content-type']?.startsWith('application/json');
-    async function body(){const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>80000)throw Error('입력이 너무 깁니다.');chunks.push(b);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
+    async function body(max=160000){const chunks=[];let size=0;for await(const b of req){size+=b.length;if(size>max)throw Error('입력이 너무 깁니다.');chunks.push(b);}return JSON.parse(Buffer.concat(chunks).toString('utf8'));}
     try{
       await auth.ready;
       if(req.method==='GET'&&url.pathname==='/api/config'){
@@ -49,9 +52,32 @@ export function createApp({auth,fetchImpl=fetch}={}){
         if(url.pathname==='/api/auth/logout'){const state=await auth.logout();pendingDraft=null;authNotice=state.revoked?'이 PC의 로그인 토큰을 지우고 연결을 종료했습니다.':'이 PC의 로그인은 종료했습니다. 원격 권한 취소는 확인되지 않아 ChatGPT 설정에서 앱 연결도 확인해 주세요.';return json(200,{...state,notice:authNotice});}
         return json(404,{error:'지원하지 않는 연결 요청입니다.'});
       }
+      if(req.method==='POST'&&url.pathname==='/api/documents/read'){
+        if(!protectedPost())return json(403,{error:'면접실의 서류 첨부 버튼을 사용해 주세요.'});
+        if(parseBusy||busy)return json(429,{error:'진행 중인 작업이 끝난 뒤 첨부해 주세요.'});
+        parseBusy=true;
+        try{const document=await readDocument(await body(7100000));return json(200,{document});}
+        finally{parseBusy=false;}
+      }
+      if(req.method==='POST'&&url.pathname==='/api/questions'){
+        if(!protectedPost())return json(403,{error:'면접실의 서류로 질문 받기 버튼을 사용해 주세요.'});
+        if(busy||parseBusy||Date.now()-lastStarted<3000)return json(429,{error:'진행 중인 작업이 끝난 뒤 다시 요청해 주세요.'});
+        const data=await body(),input=validateQuestionInput(data),model=data.model;
+        if(!auth.publicStatus().sharing)return json(401,{error:'먼저 ChatGPT로 로그인하고 구독 사용을 허용해 주세요.'});
+        if(!auth.cachedModels?.some(m=>m.id===model))return json(400,{error:'이 계정의 모델 목록에서 사용할 모델을 선택해 주세요.'});
+        busy=true;lastStarted=Date.now();
+        const control=new AbortController(),timer=setTimeout(()=>control.abort(),90000);
+        res.on('close',()=>{if(!res.writableEnded)control.abort();});
+        try{
+          const credentials=await auth.credentials();
+          const output=await generateQuestions(input,{accessToken:credentials.accessToken,model,fetchImpl,signal:control.signal});
+          return json(200,output);
+        }catch(e){return json(400,{error:control.signal.aborted?'질문 생성을 중단했거나 90초를 넘었습니다. 자동 재요청하지 않았습니다.':e.message});}
+        finally{clearTimeout(timer);busy=false;}
+      }
       if(req.method==='POST'&&url.pathname==='/api/evaluate'){
         if(!protectedPost())return json(403,{error:'화면의 답변 제출 버튼을 사용해 주세요.'});
-        if(busy||Date.now()-lastStarted<3000)return json(429,{error:'진행 중인 평가가 끝난 뒤 다시 요청해 주세요.'});
+        if(busy||parseBusy||Date.now()-lastStarted<3000)return json(429,{error:'진행 중인 평가가 끝난 뒤 다시 요청해 주세요.'});
         let input,model;
         try{const data=await body();input=validateInput(data);model=data.model;if(typeof model!=='string'||model.length>150)throw Error();}
         catch{return json(400,{error:'공고·경험·질문·답변과 선택한 모델을 확인해 주세요.'});}
