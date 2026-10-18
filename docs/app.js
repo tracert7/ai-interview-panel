@@ -1,7 +1,7 @@
 import {ROLES,CRITERIA,QUESTION,validateInput} from './core.mjs';
 import {roomView} from './room-state.mjs';
 import {DOCUMENT_LIMITS,validateDocuments,validateQuestionInput} from './document-core.mjs';
-import {createVoiceInput} from './voice.mjs';
+import {createVoiceInput} from './voice.mjs?v=0.5.1';
 const $=id=>document.getElementById(id);
 let mode='example',example,results={},history=[],controller=null,busy=false,ready=false,model=null,shownInput=null;
 let speaker='hr',exampleIndex=null;
@@ -39,7 +39,7 @@ function renderRoom(){
   $('dialogue-speaker').textContent=v.speaker;$('dialogue-kind').textContent=v.kind;$('dialogue-question').textContent=v.text;$('room-state').textContent=v.state;
   if(busy&&task!=='evaluation')$('room-state').textContent=task==='questions'?'서류 질문 준비 중':'서류 읽는 중';
   for(const el of document.querySelectorAll('[data-speaker]'))el.setAttribute('aria-pressed',String(el.dataset.speaker===v.role));
-  if(voice.active)$('room-state').textContent='답변을 듣고 있습니다';
+  if(voice.active)$('room-state').textContent=voice.phase==='connecting'?'마이크 연결 요청 중':voice.phase==='stopping'?'답변 정리 중':'답변을 듣고 있습니다';
   $('feedback-summary').textContent=Object.keys(results).length?'평가 근거와 다음에 고칠 문장을 읽어보세요.':'답변 뒤에 근거·보완점·꼬리질문을 확인합니다.';
 }
 function renderAgents(states={}){
@@ -219,7 +219,7 @@ async function askFromDocuments(){
 const voice=createVoiceInput({Recognition:window.SpeechRecognition||window.webkitSpeechRecognition,
   onText:text=>{const area=$('answer'),joined=area.value+(area.value&&!/\s$/.test(area.value)?' ':'')+text;if(joined.length>5000){voice.stop({discard:true});$('voice-status').textContent='5,000자 한도입니다. 일부 문장을 정리한 뒤 다시 입력해 주세요.';return;}area.value=joined;editableChanged();},
   onInterim:text=>{$('voice-interim').textContent=text;},
-  onState:active=>{$('voice-stop').hidden=!active;$('voice-indicator').hidden=!active;$('voice-start').setAttribute('aria-pressed',String(active));$('answer').classList.toggle('listening',active);if(active)$('answer-review').open=true;updateTools();renderRoom();},
+  onState:(active,phase)=>{$('voice-stop').hidden=!active;$('voice-stop').textContent=phase==='connecting'?'연결 취소':phase==='stopping'?'답변 정리 중':'답변 마치기';$('voice-indicator').hidden=phase!=='listening';$('voice-start').setAttribute('aria-pressed',String(phase==='listening'));$('answer').classList.toggle('listening',phase==='listening');if(active)$('answer-review').open=true;updateTools();renderRoom();},
   onMessage:message=>{$('voice-status').textContent=message;}
 });
 if(!voice.supported)$('voice-status').textContent='이 브라우저는 음성 입력을 지원하지 않습니다. Chrome에서 열거나 키보드로 입력해 주세요.';
