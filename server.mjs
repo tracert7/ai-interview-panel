@@ -4,7 +4,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {ROLES,validateInput,validateFeedback,buildRequest} from './docs/core.mjs';
 const ROOT=path.resolve(fileURLToPath(new URL('./docs/',import.meta.url)));
-const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.txt':'text/plain; charset=utf-8','.jpg':'image/jpeg'};
+const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.txt':'text/plain; charset=utf-8','.jpg':'image/jpeg','.png':'image/png'};
 export async function evaluateRole(role,input,{apiKey,model,fetchImpl=fetch,signal}) {
   const r=await fetchImpl('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},body:JSON.stringify(buildRequest(role,input,model)),signal});
   if(!r.ok) throw Error(r.status===429?'이용 한도 또는 요청 제한입니다. 자동 재시도하지 않았습니다.':r.status===401?'서버의 API 키를 확인해 주세요.':'API 요청이 실패했습니다 ('+r.status+').');

@@ -1,6 +1,6 @@
 {
   "name": "ai-interview-panel",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "한국어 3인 모의면접 연습실 — Work 키트와 로컬 API UI",
