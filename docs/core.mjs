@@ -37,6 +37,3 @@ export function buildRequest(role,input,model) {
     input:[{role:'user',content:JSON.stringify({공고:input.job,확인된경험:input.facts,질문:input.question,답변:input.answer,...(input.documents?.length?{첨부서류:input.documents}:{})})}],
     text:{format:{type:'json_schema',name:'interview_feedback',strict:true,schema:SCHEMA}}};
 }
-export function workPrompt(job,facts) {
-  return `너는 모의면접 진행자다. 질문 하나를 하고 내 답변을 기다려. 답변이 도착하면 실제 서브에이전트 3개를 병렬로 만들어 평가해. 한 에이전트가 세 역할을 연기하거나 진행자가 대신 평가하면 안 된다. 생성할 수 없다면 그 사실을 알리고 멈춰.\n\n${ROLES.map(r=>r.name+': '+r.focus).join('\n')}\n\n각 에이전트에는 같은 공고·경험 사실·질문·답변과 자신의 역할만 전달해. 다른 에이전트 점수나 피드백은 전달하지 마.\n${COMMON}\n결과는 점수 5개와 20점 만점 합계, 짧은 근거, 고칠 점 1개, 꼬리질문 1개로 구분해 보여줘. 실제 에이전트 작업 목록을 확인할 수 있게 해줘. 다음 답변은 기존 세 에이전트를 재사용할 수 있으면 재사용하고, 새로 만들었다면 알려줘. 세 평가가 끝나면 꼬리질문 하나만 선택하고 기다려.\n\n[공고]\n${job}\n\n[확인된 경험]\n${facts}\n\n다른 대화·메모리·파일·웹을 참조하거나 지원서 제출·결제·공개는 하지 마. 지금은 에이전트를 실행하지 말고 ‘${QUESTION}’라는 질문 하나만 해줘.`;
-}

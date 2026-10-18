@@ -1,5 +1,5 @@
 import {execFileSync} from 'node:child_process';
-const paths=execFileSync('git',['diff','--cached','--name-only','-z'],{encoding:'utf8'}).split('\0').filter(Boolean);
+const paths=execFileSync('git',['diff','--cached','--diff-filter=ACMR','--name-only','-z'],{encoding:'utf8'}).split('\0').filter(Boolean);
 for(const p of paths){
   if(/(^|\/)(\.private|private|node_modules)(\/|$)|\.auth\.enc$/.test(p)||/(^|\/)\.env/.test(p)&&p!=='.env.example')throw Error('Private file cannot be published: '+p);
   if(/\.(png|jpe?g|gif|webp)$/.test(p))continue;
