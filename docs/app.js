@@ -2,6 +2,7 @@ import {ROLES,CRITERIA,QUESTION,validateInput} from './core.mjs';
 import {roomView} from './room-state.mjs';
 import {DOCUMENT_LIMITS,validateDocuments,validateQuestionInput} from './document-core.mjs';
 import {createVoiceInput} from './voice.mjs?v=0.5.1';
+import {overallGrade,GRADE_TIERS} from './grade.mjs?v=0.6.0';
 const $=id=>document.getElementById(id);
 let mode='example',example,results={},history=[],controller=null,busy=false,ready=false,model=null,shownInput=null;
 let speaker='hr',exampleIndex=null;
@@ -11,6 +12,31 @@ let documents=[],documentQuestions=[],task='evaluation';
 let stage='prepare',liveDraft=null;
 const status=t=>{$('feedback-status').textContent=t;$('prepare-status').textContent=t;};
 const make=(tag,text,cls)=>{const e=document.createElement(tag);if(text!==undefined)e.textContent=text;if(cls)e.className=cls;return e;};
+const overallPanel=make('section',undefined,'grade-summary');overallPanel.id='overall-grade';overallPanel.hidden=true;overallPanel.setAttribute('aria-labelledby','overall-grade-heading');$('feedback-panel').before(overallPanel);
+const gradeLive=make('p',undefined,'sr-only');gradeLive.setAttribute('role','status');gradeLive.setAttribute('aria-live','polite');overallPanel.before(gradeLive);
+const historyHeading=make('th','종합 등급');$('history').closest('table').querySelector('thead tr').children[4].before(historyHeading);
+let overallKey='';
+function renderOverall(){
+  const grade=overallGrade(results),evaluating=busy&&task==='evaluation';
+  const key=JSON.stringify([mode,evaluating,grade,Object.keys(results).length]);if(key===overallKey)return;overallKey=key;
+  overallPanel.hidden=!evaluating&&!Object.keys(results).length;overallPanel.replaceChildren();
+  if(overallPanel.hidden){gradeLive.textContent='';return;}
+  if(evaluating||grade.status!=='complete'){
+    overallPanel.removeAttribute('data-grade');overallPanel.style.removeProperty('--rank-color');overallPanel.style.removeProperty('--rank-surface');
+    const title=make('h2',evaluating?'종합 등급을 준비하고 있습니다':'종합 등급 보류');title.id='overall-grade-heading';overallPanel.append(title,make('p',grade.completed+' / 3개 평가 확인 · 세 평가가 모두 끝나야 등급을 매깁니다.','grade-pending'));
+    if(!evaluating){overallPanel.append(make('p','실패하거나 누락된 평가는 F등급으로 계산하지 않습니다.','helper'));gradeLive.textContent='종합 등급 보류. 세 평가가 모두 완료되지 않았습니다.';}return;
+  }
+  const {tier}=grade;overallPanel.dataset.grade=tier.label;overallPanel.style.setProperty('--rank-color',tier.color);overallPanel.style.setProperty('--rank-surface',tier.surface);
+  const layout=make('div',undefined,'grade-hero'),medal=make('div',undefined,'rank-medallion');medal.setAttribute('role','img');medal.setAttribute('aria-label','이번 답변 '+tier.label+' 등급');medal.append(make('span',tier.label,'grade-letter'),make('span','이번 답변','grade-seal'));
+  const body=make('div',undefined,'grade-body'),title=make('h2',mode==='example'?'기록된 예제의 종합 등급':'이번 답변 종합 등급');title.id='overall-grade-heading';
+  const points=make('p',undefined,'grade-points');points.append(make('strong',grade.percentage.toLocaleString('ko-KR',{maximumFractionDigits:1})),make('span',' / 100점'));
+  body.append(title,make('p',tier.title,'grade-verdict'),points,make('p','원점수 '+grade.total+' / 60점 · 인사·현업·팀장 동일 가중치','grade-basis'));
+  const rail=make('ol',undefined,'grade-rail');rail.setAttribute('aria-label','높은 순서의 전체 등급');for(const t of GRADE_TIERS){const step=make('li',t.label);if(t.label===tier.label){step.setAttribute('aria-current','step');step.setAttribute('aria-label','현재 등급 '+t.label);}rail.append(step);}body.append(rail);layout.append(medal,body);overallPanel.append(layout);
+  const breakdown=make('div',undefined,'grade-breakdown');for(const c of grade.criteria){const cell=make('div');cell.append(make('span',c.name),make('strong',c.total+' / 12'));breakdown.append(cell);}overallPanel.append(breakdown);
+  const rules=make('details',undefined,'grade-rules');rules.append(make('summary','등급 산정 기준 보기'),make('p','세 역할의 20점 만점 점수를 합산해 100점으로 환산합니다. 등급은 반올림 전 값으로 판정합니다. 이 앱의 연습 기준이며, 실제 채용 등급·합격률·지원자 순위가 아닙니다.'));
+  const table=make('table'),caption=make('caption','앱 기준 answer-rank-v1'),head=make('thead'),headrow=make('tr');for(const text of ['등급','100점 환산 구간'])headrow.append(make('th',text));head.append(headrow);table.append(caption,head);const rows=make('tbody');GRADE_TIERS.forEach((t,i)=>{const row=make('tr');row.append(make('th',t.label),make('td',t.min+'점 이상'+(i?' '+GRADE_TIERS[i-1].min+'점 미만':'')));rows.append(row);});table.append(rows);rules.append(table);overallPanel.append(rules,make('p','사람의 능력이나 합격 가능성이 아닌, 이번 답변에 대한 연습 등급입니다.','grade-disclaimer'));
+  gradeLive.textContent=(mode==='example'?'기록된 예제. ':'')+'종합 '+tier.label+' 등급, '+grade.percentage+'점. '+grade.total+' / 60점.';
+}
 function fields(){return {job:$('job').value,facts:$('facts').value||(documents.length?'별도 경험 메모 없음. 첨부 서류의 업무 경험을 참고하세요.':'별도 경험 메모가 제공되지 않았습니다. 답변 이외의 경험 사실을 가정하지 마세요.'),question:$('question').value,answer:$('answer').value,...(mode==='live'&&documents.length?{documents:documents.map(({name,text})=>({name,text}))}:{})};}
 function openSettings(){const dialog=$('settings-dialog');if(!dialog.open){if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');}}
 function closeSettings(){const dialog=$('settings-dialog');if(typeof dialog.close==='function')dialog.close();else dialog.removeAttribute('open');}
@@ -62,6 +88,7 @@ function renderAgents(states={}){
     $('agent-grid').append(card);
   }
   renderRoom();
+  renderOverall();
 }
 function updateCount(){$('answer-count').textContent=$('answer').value.length.toLocaleString()+' / 5,000자';updateTools();}
 function nextStep(){
@@ -70,11 +97,11 @@ function nextStep(){
   $('use-next').hidden=mode!=='live';
 }
 function addHistory(input,kind){
-  history.push({input:structuredClone(input),results:structuredClone(results),kind,at:new Date().toISOString(),model:kind==='ChatGPT 구독'?model:null});
+  history.push({input:structuredClone(input),results:structuredClone(results),overall:overallGrade(results),kind,at:new Date().toISOString(),model:kind==='ChatGPT 구독'?model:null});
   $('history-section').hidden=false;$('export').disabled=false;
   const row=make('tr');row.append(make('td',String(history.length)));
   for(const role of ROLES)row.append(make('td',results[role.id]?.total===undefined?'미완료':results[role.id].total+'점'));
-  row.append(make('td',kind));$('history').append(row);
+  const grade=overallGrade(results),rank=make('td',grade.status==='complete'?grade.tier.label:'보류');if(grade.status==='complete'){rank.className='history-rank';rank.style.color=grade.tier.color;}row.append(rank,make('td',kind));$('history').append(row);
 }
 function clearResult(){results={};shownInput=null;$('feedback-panel').open=false;renderAgents();$('next-step').hidden=true;}
 function editableChanged(){
@@ -94,6 +121,7 @@ function setBusy(value,kind='evaluation'){
   if(!value){$('auth-start').disabled=!localApp;$('auth-refresh').disabled=!localApp;$('auth-logout').disabled=!connection?.connected;$('model-select').disabled=!ready;}
   updateTools();
   renderRoom();
+  renderOverall();
 }
 async function setMode(value){
   if(busy)return;if(mode!==value&&history.length&&!confirm('예제를 전환하면 현재 평가 기록이 지워집니다. 먼저 내보낼 수 있습니다. 계속할까요?'))return;
@@ -124,6 +152,7 @@ function showExample(index){
   results=Object.fromEntries(round.results.map(r=>[r.role,r]));shownInput=fields();renderAgents();nextStep();updateCount();addHistory(shownInput,'Work 기록');
   status((index===0?'첫 답변':'수정 답변')+'의 기록된 결과입니다. 가상 사례이며 새 AI 호출은 없습니다.');
   $('feedback-panel').open=true;
+  overallPanel.scrollIntoView({block:'start',behavior:'auto'});
 }
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=make('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 async function evaluate(){
@@ -146,7 +175,7 @@ async function evaluate(){
   }catch(e){status(e.name==='AbortError'?'평가를 중단했습니다. 이미 소모된 구독 사용량은 되돌릴 수 없습니다.':e.message);}
   finally{
     for(const role of ROLES)if(!results[role.id])results[role.id]={error:'완료되지 않았습니다. 자동 재요청하지 않았습니다.'};
-    renderAgents();nextStep();addHistory(input,'ChatGPT 구독');setBusy(false);controller=null;$('feedback-panel').open=true;
+    renderAgents();nextStep();addHistory(input,'ChatGPT 구독');setBusy(false);controller=null;$('feedback-panel').open=true;overallPanel.scrollIntoView({block:'start',behavior:'auto'});
   }
 }
 function requirePlan(){

@@ -7,14 +7,15 @@ import * as core from '../docs/core.mjs';
 import {roomView} from '../docs/room-state.mjs';
 import * as documents from '../docs/document-core.mjs';
 import {createVoiceInput} from '../docs/voice.mjs';
+import * as grading from '../docs/grade.mjs';
 const example=JSON.parse(await readFile(new URL('../docs/example.json',import.meta.url),'utf8'));
 const html=await readFile(new URL('../docs/index.html',import.meta.url),'utf8');
 const app=(await readFile(new URL('../docs/app.js',import.meta.url),'utf8')).replace(/^import .+;\r?\n/gm,'');
 const docText='가상 지원자는 고객 설문 24건을 분류하고 기준표를 만들었습니다.';
-async function boot({local=true,voiceSupport=true,connected=true,questionsFail=false,speechStart=true}={}){
+async function boot({local=true,voiceSupport=true,connected=true,questionsFail=false,speechStart=true,partialEvaluation=false}={}){
  const dom=new JSDOM(html,{url:local?'http://127.0.0.1:4317/':'https://tracert7.github.io/ai-interview-panel/',runScripts:'outside-only'}),w=dom.window,calls=[];let microphone=null;
  class Recognition{constructor(){microphone=this;}start(){if(speechStart)this.onstart?.();}stop(){this.onend?.();}abort(){}}
- Object.assign(w,core,documents,{roomView,createVoiceInput,structuredClone,TextDecoder,TextEncoder,ReadableStream,AbortController,confirm:()=>true});
+ Object.assign(w,core,documents,grading,{roomView,createVoiceInput,structuredClone,TextDecoder,TextEncoder,ReadableStream,AbortController,confirm:()=>true});
  if(voiceSupport)w.SpeechRecognition=Recognition;
  w.HTMLElement.prototype.scrollIntoView=function(){};
  w.HTMLDialogElement.prototype.showModal=function(){this.setAttribute('open','');};w.HTMLDialogElement.prototype.close=function(){this.removeAttribute('open');};
@@ -27,7 +28,7 @@ async function boot({local=true,voiceSupport=true,connected=true,questionsFail=f
   if(url==='/api/draft')return json({draft:null});
   if(url==='/api/documents/read')return json({document:{name:'자소서.txt',text:docText,notes:[]}});
   if(url==='/api/questions')return questionsFail?{ok:false,json:async()=>({error:'가상 질문 생성 실패'})}:json({questions:core.ROLES.map(r=>({role:r.id,question:r.name+'의 서류 질문',source:'자소서.txt',quote:'고객 설문 24건을 분류하고 기준표를 만들었습니다.',intent:'본인이 한 일을 확인합니다.'}))});
-  if(url==='/api/evaluate')return {ok:true,body:new ReadableStream({start(c){for(const role of core.ROLES)c.enqueue(new TextEncoder().encode(JSON.stringify({type:'result',result:{role:role.id,scores:[2,2,2,2,2],quote:'분류',reason:'설명 필요',improvement:'기준 설명',followup:'어떤 기준인가요?',total:10}})+'\n'));c.enqueue(new TextEncoder().encode('{"type":"done"}\n'));c.close();}})};
+  if(url==='/api/evaluate')return {ok:true,body:new ReadableStream({start(c){for(const role of core.ROLES){const event=partialEvaluation&&role.id==='lead'?{type:'error',role:role.id,error:'가상 부분 실패'}:{type:'result',result:{role:role.id,scores:[2,2,2,2,2],quote:'분류',reason:'설명 필요',improvement:'기준 설명',followup:'어떤 기준인가요?',total:10}};c.enqueue(new TextEncoder().encode(JSON.stringify(event)+'\n'));}c.enqueue(new TextEncoder().encode('{"type":"done"}\n'));c.close();}})};
   throw Error('Unexpected UI request: '+url);
  };
  // Execute the voice module in the browser realm as well: Node timers hide illegal Window receiver bugs.
@@ -54,10 +55,26 @@ test('UI: attachment preview → role questions → voice text → real-submit s
   assert.equal(h.calls.filter(c=>c.url==='/api/evaluate').length,0);assert.equal($('evaluate').hidden,true);$('voice-stop').click();assert.equal($('voice-indicator').hidden,true);assert.equal($('evaluate').hidden,false);
   $('evaluate').click();await until(()=>$('feedback-panel').open&&!$('evaluate').disabled);
   assert.equal($('agent-grid').children.length,3);assert.equal(h.calls.find(c=>c.url==='/api/evaluate').body.documents[0].text,docText);
+  assert.equal($('overall-grade').hidden,false);assert.equal($('overall-grade').dataset.grade,'E');assert($('overall-grade').textContent.includes('30 / 60점'));assert.equal($('history').querySelector('.history-rank').textContent,'E');
   $('back-to-prepare').click();assert.equal(w.document.body.dataset.stage,'prepare');assert.equal($('answer').value,'저는 설문을 분류했습니다.');
   $('start-interview').click();await until(()=>w.document.body.dataset.stage==='interview');assert.equal($('answer').value,'저는 설문을 분류했습니다.');assert.equal(h.calls.filter(c=>c.url==='/api/questions').length,1);$('back-to-prepare').click();
   $('document-list').querySelector('textarea').value='수정한 서류 내용';$('document-list').querySelector('textarea').dispatchEvent(new w.Event('input'));assert.equal($('question-bank').hidden,true);assert.equal($('consent').checked,false);
+  assert.equal($('overall-grade').hidden,true);
   $('reset').click();assert.equal($('document-count').textContent,'첨부 0 / 3');assert.equal($('answer').value,'');
+ }finally{h.dom.window.close();}
+});
+test('UI: no premature grade; recorded examples show computed E and A+ with explicit source',async()=>{
+ const h=await boot(),{$,w}=h;try{
+  assert.equal($('overall-grade').hidden,true);$('mode-example').click();await until(()=>!$('example-tools').hidden);assert.equal($('overall-grade').hidden,true);
+  $('example-feedback').click();assert.equal($('overall-grade').dataset.grade,'E');assert($('overall-grade-heading').textContent.includes('기록된 예제'));
+  $('second-example').click();assert.equal($('overall-grade').hidden,true);$('example-feedback').click();assert.equal($('overall-grade').dataset.grade,'A+');assert($('overall-grade').textContent.includes('56 / 60점'));
+  const letter=$('overall-grade').querySelector('.grade-letter').textContent;w.document.querySelector('[data-speaker="lead"]').click();assert.equal($('overall-grade').querySelector('.grade-letter').textContent,letter);
+ }finally{h.dom.window.close();}
+});
+test('UI: partial evaluation withholds overall grade rather than assigning F',async()=>{
+ const h=await boot({partialEvaluation:true}),{$,w}=h;try{
+  $('job').value='가상 조사 인턴';$('model-select').value='test-model';$('model-select').dispatchEvent(new w.Event('change'));$('consent').checked=true;$('start-interview').click();$('answer').value='고객 의견을 분류했습니다.';$('answer').dispatchEvent(new w.Event('input'));$('evaluate').click();await until(()=>$('feedback-panel').open&&!$('evaluate').disabled);
+  assert.equal($('overall-grade').hidden,false);assert.equal($('overall-grade').getAttribute('data-grade'),null);assert.equal($('overall-grade').querySelector('.grade-letter'),null);assert.equal($('overall-grade-heading').textContent,'종합 등급 보류');assert($('overall-grade').textContent.includes('2 / 3개'));assert.equal($('history').children[0].children[4].textContent,'보류');
  }finally{h.dom.window.close();}
 });
 test('UI: public demo does not enable server attachments, and unsupported speech has honest fallback',async()=>{
