@@ -4,6 +4,8 @@
 
 **[모의면접실 열기](https://tracert7.github.io/ai-interview-panel/)** · [Work 시작 요청문](docs/work-start.txt) · [실제 3개 에이전트 확인 화면](docs/images/work-agents.jpg)
 
+![공개 웹 화면에서 인사담당자 12점, 현업 11점, 팀장 11점과 개별 근거를 나란히 확인한 실제 화면](docs/images/interview-ui.jpg)
+
 ## 시작하기
 
 설치 없이 위 **모의면접실 열기 → 첫 답변 보기 → 수정 답변 보기**를 누르세요. 가상 지원자의 같은 질문에 대한 두 답변과 실제 Work 평가 기록을 비교할 수 있습니다. 이 예제 버튼은 새 답변을 평가하지 않습니다.
