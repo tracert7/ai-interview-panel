@@ -52,7 +52,7 @@ function setBusy(value){
 async function setMode(value){
   if(busy)return;mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
   for(const m of ['example','work','live'])$('mode-'+m).setAttribute('aria-pressed',String(m===mode));
-  $('work-tools').hidden=mode!=='work';$('live-settings').hidden=mode!=='live';$('example-tools').hidden=mode!=='example';$('evaluate').hidden=mode!=='live';
+  $('work-tools').hidden=mode!=='work';$('work-guide').hidden=mode!=='work';$('practice-panel').hidden=mode==='work';$('live-settings').hidden=mode!=='live';$('example-tools').hidden=mode!=='example';$('evaluate').hidden=mode!=='live';
   for(const id of ['job','facts','question','answer'])$(id).readOnly=mode==='example';
   $('mode-note').textContent={example:'실제로 진행한 가상 지원자의 Work 실습 기록입니다. 예제 버튼은 새 AI 평가를 실행하지 않습니다.',work:'내 공고와 경험으로 시작 요청문을 만들고 ChatGPT Work에서 실제 서브에이전트 3개를 실행합니다. 이 페이지는 Work 대화를 자동으로 읽지 않습니다.',live:'본인 PC의 서버에서 역할별 API 요청 3개를 병렬 실행합니다. API 비용은 ChatGPT 구독과 별개이며, 제출할 때만 전송합니다.'}[mode];
   status(mode==='example'?'‘첫 답변 보기’를 눌러 실습 결과를 확인하세요.':mode==='work'?'공고·경험을 바꾸고 요청문을 복사하세요.':'공고·경험·질문·답변을 입력하고 전송 동의를 확인하세요.');
