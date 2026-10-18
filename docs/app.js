@@ -19,6 +19,7 @@ function renderAgents(states={}){
       card.append(make('div',r.quote?'답변에서 본 근거':'평가 근거','detail-label'));
       if(r.quote)card.append(make('blockquote',r.quote));
       card.append(make('p',r.reason,'detail'),make('div','이번에 고칠 점','detail-label'),make('p',r.improvement,'detail'),make('div','꼬리질문','detail-label'),make('p',r.followup,'detail'));
+      if(mode==='live'){const select=make('button','이 꼬리질문 선택','secondary');select.addEventListener('click',()=>{$('next-question').textContent=r.followup;$('next-step').hidden=false;status(role.name+'의 꼬리질문을 선택했습니다. 이어서 연습 버튼을 누르세요.');});card.append(select);}
     }
     $('agent-grid').append(card);
   }
@@ -50,7 +51,7 @@ function setBusy(value){
   $('evaluate').disabled=value||!ready;
 }
 async function setMode(value){
-  if(busy)return;mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
+  if(busy)return;if(history.some(h=>h.kind==='API')&&!confirm('모드를 바꾸면 현재 평가 기록이 지워집니다. 필요하면 먼저 내보내 주세요. 계속할까요?'))return;mode=value;clearResult();history=[];$('history').replaceChildren();$('history-section').hidden=true;$('export').disabled=true;
   for(const m of ['example','work','live'])$('mode-'+m).setAttribute('aria-pressed',String(m===mode));
   $('work-tools').hidden=mode!=='work';$('work-guide').hidden=mode!=='work';$('practice-panel').hidden=mode==='work';$('live-settings').hidden=mode!=='live';$('example-tools').hidden=mode!=='example';$('evaluate').hidden=mode!=='live';
   for(const id of ['job','facts','question','answer'])$(id).readOnly=mode==='example';
